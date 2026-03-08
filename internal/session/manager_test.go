@@ -1,7 +1,10 @@
 package session
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -667,6 +670,60 @@ func TestManager_SetStatus_NonExistent(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// NotificationHistory tests
+// ---------------------------------------------------------------------------
+
+func TestManager_NotificationHistory(t *testing.T) {
+	mgr, _ := newTestManager(t)
+
+	// Initially, notification history should be empty
+	history := mgr.NotificationHistory()
+	if len(history) != 0 {
+		t.Fatalf("initial NotificationHistory: got %d entries, want 0", len(history))
+	}
+
+	// Create sessions and trigger hook events that generate notifications
+	sess1, err := mgr.CreateWithOptions(CreateOptions{WorkDir: "/tmp/notify-1", Name: "n1"})
+	if err != nil {
+		t.Fatalf("create sess1 failed: %v", err)
+	}
+	sess2, err := mgr.CreateWithOptions(CreateOptions{WorkDir: "/tmp/notify-2", Name: "n2"})
+	if err != nil {
+		t.Fatalf("create sess2 failed: %v", err)
+	}
+
+	// Set sessions to thinking first (Stop hook transitions from thinking to idle)
+	mgr.SetStatus(sess1.ID, StatusThinking)
+	mgr.SetStatus(sess2.ID, StatusThinking)
+
+	// Trigger Stop event (generates task_complete notification)
+	mgr.HandleHookEvent(sess1.ClaudeSessionID, sess1.ID, "Stop", "", "")
+
+	// Trigger Notification/permission event (generates permission notification)
+	mgr.HandleHookEvent(sess2.ClaudeSessionID, sess2.ID, "Notification", "permission_prompt", "")
+
+	history = mgr.NotificationHistory()
+	if len(history) != 2 {
+		t.Fatalf("NotificationHistory: got %d entries, want 2", len(history))
+	}
+
+	// History is sorted newest first, so permission (sess2) should come first
+	if history[0].SessionID != sess2.ID {
+		t.Errorf("history[0].SessionID: got %q, want %q", history[0].SessionID, sess2.ID)
+	}
+	if history[0].Type != "permission" {
+		t.Errorf("history[0].Type: got %q, want %q", history[0].Type, "permission")
+	}
+
+	if history[1].SessionID != sess1.ID {
+		t.Errorf("history[1].SessionID: got %q, want %q", history[1].SessionID, sess1.ID)
+	}
+	if history[1].Type != "task_complete" {
+		t.Errorf("history[1].Type: got %q, want %q", history[1].Type, "task_complete")
+	}
+}
+
 func TestManager_SetStatus_Persisted(t *testing.T) {
 	mgr, _ := newTestManager(t)
 
@@ -683,5 +740,458 @@ func TestManager_SetStatus_Persisted(t *testing.T) {
 	}
 	if got.Status != StatusThinking {
 		t.Errorf("Status = %q, want %q", got.Status, StatusThinking)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DebugLog tests (package-level debugLog function)
+// ---------------------------------------------------------------------------
+
+func TestManager_DebugLog_Disabled(t *testing.T) {
+	// Save and restore original package-level vars
+	origEnabled := debugEnabled
+	origPath := debugLogPath
+	defer func() {
+		debugEnabled = origEnabled
+		debugLogPath = origPath
+	}()
+
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "debug.log")
+
+	debugEnabled = false
+	debugLogPath = logFile
+
+	debugLog("this message should not appear")
+
+	// Verify file was NOT created
+	if _, err := os.Stat(logFile); err == nil {
+		t.Error("debugLog created a file even though debugEnabled=false")
+	}
+}
+
+func TestManager_DebugLog_Enabled(t *testing.T) {
+	origEnabled := debugEnabled
+	origPath := debugLogPath
+	defer func() {
+		debugEnabled = origEnabled
+		debugLogPath = origPath
+	}()
+
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "debug.log")
+
+	debugEnabled = true
+	debugLogPath = logFile
+
+	debugLog("hello %s %d", "world", 42)
+
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("failed to read log file: %v", err)
+	}
+	content := string(data)
+
+	if !strings.Contains(content, "hello world 42") {
+		t.Errorf("log file content %q does not contain expected message", content)
+	}
+	// Verify timestamp format [HH:MM:SS] is present
+	if !strings.Contains(content, "[") || !strings.Contains(content, "]") {
+		t.Errorf("log file content %q does not contain timestamp brackets", content)
+	}
+}
+
+func TestManager_DebugLog_EmptyPath(t *testing.T) {
+	origEnabled := debugEnabled
+	origPath := debugLogPath
+	defer func() {
+		debugEnabled = origEnabled
+		debugLogPath = origPath
+	}()
+
+	debugEnabled = true
+	debugLogPath = ""
+
+	// Should not panic with empty path
+	debugLog("this should be a no-op with empty path")
+}
+
+// ---------------------------------------------------------------------------
+// EnsureTmuxClient not set tests
+// ---------------------------------------------------------------------------
+
+func TestManager_EnsureTmuxClient_NotSet(t *testing.T) {
+	dir := t.TempDir()
+	configDir := t.TempDir()
+	configMgr, err := config.NewManager(configDir)
+	if err != nil {
+		t.Fatalf("config.NewManager failed: %v", err)
+	}
+	mgr, err := NewManager(dir, configDir, configMgr)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	// Deliberately do NOT call SetTmuxClient — tmux client remains nil.
+
+	workDir := t.TempDir()
+	sess, err := mgr.CreateWithOptions(CreateOptions{WorkDir: workDir, Name: "notmux"})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// StartBackground calls startSession -> ensureTmuxClient internally.
+	// Without a real tmux binary, startSessionTmux will fail in some way.
+	// We mainly want to verify that it does not panic and returns an error.
+	err = mgr.StartBackground(sess.ID)
+	if err == nil {
+		// If no error, the session should at least have a status set.
+		// In CI without tmux installed, ensureTmuxClient will fail silently,
+		// and startSessionTmux will likely error on tmux commands.
+		// Either way, we verified no panic.
+		t.Log("StartBackground succeeded (tmux may be installed), verifying no panic")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Kill edge case tests
+// ---------------------------------------------------------------------------
+
+func TestManager_Kill_NotFound(t *testing.T) {
+	mgr, _ := newTestManager(t)
+
+	err := mgr.Kill("nonexistent-session-id")
+	if err == nil {
+		t.Fatal("expected error for non-existent session, got nil")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error %q does not contain 'not found'", err.Error())
+	}
+}
+
+func TestManager_Kill_WithTmuxWindowOnly(t *testing.T) {
+	mgr, mock := newTestManager(t)
+
+	sess, err := mgr.CreateWithOptions(CreateOptions{WorkDir: "/tmp/kill-win", Name: "killwin"})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Simulate session with TmuxWindowName but no TmuxPaneID (fallback path)
+	mgr.mu.Lock()
+	sess.TmuxWindowName = "ccvalet_" + sess.ID
+	sess.TmuxPaneID = "" // no pane ID
+	sess.Status = StatusRunning
+	mgr.mu.Unlock()
+
+	mock.sessions[sess.TmuxWindowName] = true
+
+	if err := mgr.Kill(sess.ID); err != nil {
+		t.Fatalf("Kill failed: %v", err)
+	}
+
+	got, ok := mgr.Get(sess.ID)
+	if !ok {
+		t.Fatal("Get returned ok=false after Kill")
+	}
+	if got.Status != StatusStopped {
+		t.Errorf("Status = %q, want %q", got.Status, StatusStopped)
+	}
+	// Should have called KillSession (fallback when no pane ID)
+	if !mock.hasCalledWith("KillSession", "ccvalet_"+sess.ID) {
+		t.Error("expected KillSession to be called with inner session name")
+	}
+}
+
+func TestManager_Kill_NoTmux(t *testing.T) {
+	mgr, _ := newTestManager(t)
+
+	sess, err := mgr.CreateWithOptions(CreateOptions{WorkDir: "/tmp/kill-notmux", Name: "killnotmux"})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Session has no tmux window or pane; Kill should still mark it stopped.
+	mgr.mu.Lock()
+	sess.Status = StatusThinking
+	mgr.mu.Unlock()
+
+	if err := mgr.Kill(sess.ID); err != nil {
+		t.Fatalf("Kill failed: %v", err)
+	}
+
+	got, ok := mgr.Get(sess.ID)
+	if !ok {
+		t.Fatal("Get returned ok=false after Kill")
+	}
+	if got.Status != StatusStopped {
+		t.Errorf("Status = %q, want %q", got.Status, StatusStopped)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Delete edge case tests
+// ---------------------------------------------------------------------------
+
+func TestManager_Delete_NotFound(t *testing.T) {
+	mgr, _ := newTestManager(t)
+
+	err := mgr.Delete("nonexistent-session-id")
+	if err == nil {
+		t.Fatal("expected error for non-existent session, got nil")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error %q does not contain 'not found'", err.Error())
+	}
+}
+
+func TestManager_Delete_Success(t *testing.T) {
+	mgr, _ := newTestManager(t)
+
+	// Create two sessions
+	sess1, err := mgr.CreateWithOptions(CreateOptions{WorkDir: "/tmp/del-s1", Name: "dels1"})
+	if err != nil {
+		t.Fatalf("create sess1 failed: %v", err)
+	}
+	_, err = mgr.CreateWithOptions(CreateOptions{WorkDir: "/tmp/del-s2", Name: "dels2"})
+	if err != nil {
+		t.Fatalf("create sess2 failed: %v", err)
+	}
+
+	// Delete the first session
+	if err := mgr.Delete(sess1.ID); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+
+	// Verify it's gone from Get
+	_, ok := mgr.Get(sess1.ID)
+	if ok {
+		t.Fatal("Get returned ok=true after Delete")
+	}
+
+	// Verify it's gone from List
+	infos := mgr.List()
+	if len(infos) != 1 {
+		t.Fatalf("List returned %d items, want 1", len(infos))
+	}
+	if infos[0].Name != "dels2" {
+		t.Errorf("remaining session Name = %q, want %q", infos[0].Name, "dels2")
+	}
+}
+
+func TestManager_Delete_WithTmuxSession(t *testing.T) {
+	mgr, mock := newTestManager(t)
+
+	sess, err := mgr.CreateWithOptions(CreateOptions{WorkDir: "/tmp/del-tmux", Name: "deltmux"})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Simulate session with active tmux
+	mgr.mu.Lock()
+	sess.TmuxWindowName = "ccvalet_" + sess.ID
+	sess.Status = StatusRunning
+	mgr.mu.Unlock()
+
+	mock.sessions[sess.TmuxWindowName] = true
+
+	if err := mgr.Delete(sess.ID); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+
+	// Should have called KillSession on the inner tmux session
+	if !mock.hasCalledWith("KillSession", "ccvalet_"+sess.ID) {
+		t.Error("expected KillSession to be called when deleting a session with tmux")
+	}
+
+	// Verify it's gone
+	_, ok := mgr.Get(sess.ID)
+	if ok {
+		t.Fatal("Get returned ok=true after Delete")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// List with HostID tests
+// ---------------------------------------------------------------------------
+
+func TestManager_List_WithHostFilter(t *testing.T) {
+	mgr, _ := newTestManager(t)
+
+	// Create sessions with different HostIDs
+	sess1, err := mgr.CreateWithOptions(CreateOptions{WorkDir: "/tmp/host-1", Name: "host1"})
+	if err != nil {
+		t.Fatalf("create sess1 failed: %v", err)
+	}
+	sess2, err := mgr.CreateWithOptions(CreateOptions{WorkDir: "/tmp/host-2", Name: "host2"})
+	if err != nil {
+		t.Fatalf("create sess2 failed: %v", err)
+	}
+	sess3, err := mgr.CreateWithOptions(CreateOptions{WorkDir: "/tmp/host-3", Name: "host3"})
+	if err != nil {
+		t.Fatalf("create sess3 failed: %v", err)
+	}
+
+	// Set different HostIDs
+	mgr.mu.Lock()
+	sess1.HostID = "local"
+	sess2.HostID = "ec2"
+	sess3.HostID = "local"
+	mgr.mu.Unlock()
+
+	// List returns all sessions (no built-in host filter)
+	infos := mgr.List()
+	if len(infos) != 3 {
+		t.Fatalf("List returned %d items, want 3", len(infos))
+	}
+
+	// Verify HostIDs are passed through in Info
+	hostIDs := map[string]string{}
+	for _, info := range infos {
+		hostIDs[info.Name] = info.HostID
+	}
+	if hostIDs["host1"] != "local" {
+		t.Errorf("host1 HostID = %q, want %q", hostIDs["host1"], "local")
+	}
+	if hostIDs["host2"] != "ec2" {
+		t.Errorf("host2 HostID = %q, want %q", hostIDs["host2"], "ec2")
+	}
+	if hostIDs["host3"] != "local" {
+		t.Errorf("host3 HostID = %q, want %q", hostIDs["host3"], "local")
+	}
+}
+
+func TestManager_List_Empty(t *testing.T) {
+	mgr, _ := newTestManager(t)
+
+	infos := mgr.List()
+	if len(infos) != 0 {
+		t.Fatalf("List on empty manager returned %d items, want 0", len(infos))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// EnsureClaudeTrustState tests
+// ---------------------------------------------------------------------------
+
+func TestManager_EnsureClaudeTrustState(t *testing.T) {
+	// ensureClaudeTrustState writes to ~/.claude/settings.local.json.
+	// We override HOME so it writes to a temp directory instead.
+	origHome := os.Getenv("HOME")
+	fakeHome := t.TempDir()
+	os.Setenv("HOME", fakeHome)
+	defer os.Setenv("HOME", origHome)
+
+	workDir := t.TempDir()
+
+	err := ensureClaudeTrustState(workDir)
+	if err != nil {
+		t.Fatalf("ensureClaudeTrustState failed: %v", err)
+	}
+
+	// Verify the trust file was created
+	settingsPath := filepath.Join(fakeHome, ".claude", "settings.local.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("failed to read settings file: %v", err)
+	}
+
+	var settings ClaudeSettings
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatalf("failed to unmarshal settings: %v", err)
+	}
+
+	// workDir should be converted to absolute path
+	absWorkDir, _ := filepath.Abs(workDir)
+	projectSettings, exists := settings.Projects[absWorkDir]
+	if !exists {
+		t.Fatalf("project settings not found for %s, got keys: %v", absWorkDir, func() []string {
+			keys := make([]string, 0, len(settings.Projects))
+			for k := range settings.Projects {
+				keys = append(keys, k)
+			}
+			return keys
+		}())
+	}
+	if !projectSettings.HasTrustDialogAccepted {
+		t.Error("HasTrustDialogAccepted = false, want true")
+	}
+}
+
+func TestManager_EnsureClaudeTrustState_Idempotent(t *testing.T) {
+	origHome := os.Getenv("HOME")
+	fakeHome := t.TempDir()
+	os.Setenv("HOME", fakeHome)
+	defer os.Setenv("HOME", origHome)
+
+	workDir := t.TempDir()
+
+	// Call twice — should be idempotent
+	if err := ensureClaudeTrustState(workDir); err != nil {
+		t.Fatalf("first call failed: %v", err)
+	}
+	if err := ensureClaudeTrustState(workDir); err != nil {
+		t.Fatalf("second call failed: %v", err)
+	}
+
+	// Verify still exactly one entry
+	settingsPath := filepath.Join(fakeHome, ".claude", "settings.local.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("failed to read settings file: %v", err)
+	}
+
+	var settings ClaudeSettings
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatalf("failed to unmarshal settings: %v", err)
+	}
+
+	absWorkDir, _ := filepath.Abs(workDir)
+	if len(settings.Projects) != 1 {
+		t.Errorf("expected 1 project entry, got %d", len(settings.Projects))
+	}
+	if !settings.Projects[absWorkDir].HasTrustDialogAccepted {
+		t.Error("HasTrustDialogAccepted = false, want true")
+	}
+}
+
+func TestManager_EnsureClaudeTrustState_MultipleProjects(t *testing.T) {
+	origHome := os.Getenv("HOME")
+	fakeHome := t.TempDir()
+	os.Setenv("HOME", fakeHome)
+	defer os.Setenv("HOME", origHome)
+
+	workDir1 := t.TempDir()
+	workDir2 := t.TempDir()
+
+	if err := ensureClaudeTrustState(workDir1); err != nil {
+		t.Fatalf("first project failed: %v", err)
+	}
+	if err := ensureClaudeTrustState(workDir2); err != nil {
+		t.Fatalf("second project failed: %v", err)
+	}
+
+	settingsPath := filepath.Join(fakeHome, ".claude", "settings.local.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("failed to read settings file: %v", err)
+	}
+
+	var settings ClaudeSettings
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatalf("failed to unmarshal settings: %v", err)
+	}
+
+	if len(settings.Projects) != 2 {
+		t.Errorf("expected 2 project entries, got %d", len(settings.Projects))
+	}
+
+	absWorkDir1, _ := filepath.Abs(workDir1)
+	absWorkDir2, _ := filepath.Abs(workDir2)
+
+	if !settings.Projects[absWorkDir1].HasTrustDialogAccepted {
+		t.Error("project 1 HasTrustDialogAccepted = false, want true")
+	}
+	if !settings.Projects[absWorkDir2].HasTrustDialogAccepted {
+		t.Error("project 2 HasTrustDialogAccepted = false, want true")
 	}
 }

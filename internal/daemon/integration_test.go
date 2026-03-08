@@ -594,3 +594,128 @@ func TestIntegration_DeleteNonExistent(t *testing.T) {
 		t.Error("expected error when deleting non-existent session, got nil")
 	}
 }
+
+func TestIntegration_NotificationHistoryWithEntries(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	_, client := setupTestServer(t)
+
+	info, err := client.NewWithOptions(NewOptions{
+		Name:    "notif-test",
+		WorkDir: "/tmp/notif-test",
+		Start:   false,
+	})
+	if err != nil {
+		t.Fatalf("NewWithOptions: %v", err)
+	}
+
+	// UserPromptSubmit → thinking
+	if err := client.SendHook(HookRequest{
+		CcvaletSessionID: info.ID,
+		HookEventName:    "UserPromptSubmit",
+	}); err != nil {
+		t.Fatalf("SendHook(UserPromptSubmit): %v", err)
+	}
+
+	// Stop → idle (generates a "task complete" notification)
+	if err := client.SendHook(HookRequest{
+		CcvaletSessionID: info.ID,
+		HookEventName:    "Stop",
+	}); err != nil {
+		t.Fatalf("SendHook(Stop): %v", err)
+	}
+
+	entries, err := client.NotificationHistory()
+	if err != nil {
+		t.Fatalf("NotificationHistory: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Error("NotificationHistory: expected at least 1 entry after Stop hook, got 0")
+	}
+}
+
+func TestIntegration_CreateMultipleAndListNames(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	_, client := setupTestServer(t)
+
+	names := []string{"alpha", "beta", "gamma"}
+	for _, name := range names {
+		_, err := client.NewWithOptions(NewOptions{
+			Name:    name,
+			WorkDir: "/tmp/" + name,
+			Start:   false,
+		})
+		if err != nil {
+			t.Fatalf("NewWithOptions(%s): %v", name, err)
+		}
+	}
+
+	sessions, err := client.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(sessions) != 3 {
+		t.Fatalf("List: got %d sessions, want 3", len(sessions))
+	}
+
+	// Collect all returned names
+	gotNames := make(map[string]bool)
+	for _, s := range sessions {
+		gotNames[s.Name] = true
+	}
+
+	for _, name := range names {
+		if !gotNames[name] {
+			t.Errorf("List: missing session name %q", name)
+		}
+	}
+}
+
+func TestIntegration_GetSessionByList(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	_, client := setupTestServer(t)
+
+	info, err := client.NewWithOptions(NewOptions{
+		Name:    "get-test",
+		WorkDir: "/tmp/get-test",
+		Start:   false,
+	})
+	if err != nil {
+		t.Fatalf("NewWithOptions: %v", err)
+	}
+
+	// Retrieve the session via List and find it by ID
+	sessions, err := client.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("List: got %d sessions, want 1", len(sessions))
+	}
+
+	got := sessions[0]
+	if got.ID != info.ID {
+		t.Errorf("ID: got %q, want %q", got.ID, info.ID)
+	}
+	if got.Name != "get-test" {
+		t.Errorf("Name: got %q, want %q", got.Name, "get-test")
+	}
+	if got.WorkDir != "/tmp/get-test" {
+		t.Errorf("WorkDir: got %q, want %q", got.WorkDir, "/tmp/get-test")
+	}
+	if string(got.Status) != "stopped" && string(got.Status) != "idle" && string(got.Status) != "" {
+		// New sessions without Start are typically "stopped"
+		t.Logf("Status: got %q (may vary by implementation)", got.Status)
+	}
+	if got.CreatedAt.IsZero() {
+		t.Error("CreatedAt is zero")
+	}
+}

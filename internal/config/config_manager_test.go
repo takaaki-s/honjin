@@ -199,3 +199,76 @@ func TestConfigManager_GetShell(t *testing.T) {
 		t.Error("GetShell returned empty string")
 	}
 }
+
+func TestConfigManager_Reload_UpdatesConfig(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write initial config file with one host
+	initialYAML := "hosts:\n  - id: host1\n    type: ssh\n    host: host1.example.com\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(initialYAML), 0644); err != nil {
+		t.Fatalf("WriteFile (initial): %v", err)
+	}
+
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	// Verify initial state loaded correctly
+	hosts := m.GetHosts()
+	if len(hosts) != 1 || hosts[0].ID != "host1" {
+		t.Fatalf("initial hosts: got %+v, want [{ID:host1 ...}]", hosts)
+	}
+
+	// Modify the YAML file directly (simulate external edit)
+	updatedYAML := "hosts:\n  - id: host2\n    type: docker\n    container: my-container\n  - id: host3\n    type: ssh\n    host: host3.example.com\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(updatedYAML), 0644); err != nil {
+		t.Fatalf("WriteFile (updated): %v", err)
+	}
+
+	// Reload and verify new values
+	if err := m.Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	hosts = m.GetHosts()
+	if len(hosts) != 2 {
+		t.Fatalf("hosts after Reload: got %d, want 2", len(hosts))
+	}
+	if hosts[0].ID != "host2" {
+		t.Errorf("hosts[0].ID: got %q, want %q", hosts[0].ID, "host2")
+	}
+	if hosts[0].Type != "docker" {
+		t.Errorf("hosts[0].Type: got %q, want %q", hosts[0].Type, "docker")
+	}
+	if hosts[0].Container != "my-container" {
+		t.Errorf("hosts[0].Container: got %q, want %q", hosts[0].Container, "my-container")
+	}
+	if hosts[1].ID != "host3" {
+		t.Errorf("hosts[1].ID: got %q, want %q", hosts[1].ID, "host3")
+	}
+}
+
+func TestConfigManager_Reload_InvalidYAML(t *testing.T) {
+	dir := t.TempDir()
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	// Save a valid config first so viper knows the config file path
+	if err := m.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// Overwrite with invalid YAML
+	invalidYAML := "hosts:\n  - id: [invalid\n    broken: {yaml\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(invalidYAML), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Reload should return an error
+	if err := m.Reload(); err == nil {
+		t.Fatal("Reload with invalid YAML: expected error, got nil")
+	}
+}

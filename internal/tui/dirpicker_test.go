@@ -448,3 +448,261 @@ func TestDirPickerModel_LoadLocalEntries(t *testing.T) {
 		}
 	})
 }
+
+// --- DirPickerModel.adjustScroll ---
+
+func TestDirPickerModel_AdjustScroll(t *testing.T) {
+	t.Run("cursor within viewport does not scroll", func(t *testing.T) {
+		m := DirPickerModel{
+			height: 18, // visibleLines = 18 - 8 = 10
+			cursor: 3,
+			offset: 0,
+		}
+		m.adjustScroll()
+
+		if m.offset != 0 {
+			t.Errorf("offset should remain 0 when cursor is within viewport, got %d", m.offset)
+		}
+	})
+
+	t.Run("cursor beyond viewport scrolls down", func(t *testing.T) {
+		m := DirPickerModel{
+			height: 18, // visibleLines = 10
+			cursor: 12,
+			offset: 0,
+		}
+		m.adjustScroll()
+
+		// cursor(12) >= offset(0) + visibleLines(10), so offset = 12 - 10 + 1 = 3
+		if m.offset != 3 {
+			t.Errorf("offset should be 3 when cursor=12 exceeds viewport of 10, got %d", m.offset)
+		}
+	})
+
+	t.Run("cursor before offset scrolls up", func(t *testing.T) {
+		m := DirPickerModel{
+			height: 18, // visibleLines = 10
+			cursor: 2,
+			offset: 5,
+		}
+		m.adjustScroll()
+
+		// cursor(2) < offset(5), so offset = cursor = 2
+		if m.offset != 2 {
+			t.Errorf("offset should be 2 when cursor=2 is before offset=5, got %d", m.offset)
+		}
+	})
+
+	t.Run("small height uses default visibleLines of 10", func(t *testing.T) {
+		m := DirPickerModel{
+			height: 5, // visibleLines = 5 - 8 = -3, clamped to 10
+			cursor: 15,
+			offset: 0,
+		}
+		m.adjustScroll()
+
+		// visibleLines defaults to 10, cursor(15) >= offset(0)+10, so offset = 15 - 10 + 1 = 6
+		if m.offset != 6 {
+			t.Errorf("offset should be 6 with small height (default visibleLines=10), got %d", m.offset)
+		}
+	})
+
+	t.Run("cursor at last visible line does not scroll", func(t *testing.T) {
+		m := DirPickerModel{
+			height: 18, // visibleLines = 10
+			cursor: 9,
+			offset: 0,
+		}
+		m.adjustScroll()
+
+		// cursor(9) < offset(0)+visibleLines(10) → no scroll needed
+		if m.offset != 0 {
+			t.Errorf("offset should remain 0 when cursor is at last visible line, got %d", m.offset)
+		}
+	})
+
+	t.Run("cursor exactly at boundary triggers scroll", func(t *testing.T) {
+		m := DirPickerModel{
+			height: 18, // visibleLines = 10
+			cursor: 10,
+			offset: 0,
+		}
+		m.adjustScroll()
+
+		// cursor(10) >= offset(0)+visibleLines(10) → offset = 10 - 10 + 1 = 1
+		if m.offset != 1 {
+			t.Errorf("offset should be 1 when cursor=10 hits boundary, got %d", m.offset)
+		}
+	})
+}
+
+// --- NewDirPickerModel ---
+
+func TestNewDirPickerModel(t *testing.T) {
+	t.Run("empty startDir defaults to home directory", func(t *testing.T) {
+		m := NewDirPickerModel("")
+
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skipf("cannot get home dir: %v", err)
+		}
+		if m.currentDir != home {
+			t.Errorf("NewDirPickerModel(\"\").currentDir = %q, want %q", m.currentDir, home)
+		}
+	})
+
+	t.Run("absolute path is used directly", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		m := NewDirPickerModel(tmpDir)
+
+		if m.currentDir != tmpDir {
+			t.Errorf("NewDirPickerModel(%q).currentDir = %q, want %q", tmpDir, m.currentDir, tmpDir)
+		}
+	})
+
+	t.Run("tilde path is expanded", func(t *testing.T) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skipf("cannot get home dir: %v", err)
+		}
+		m := NewDirPickerModel("~/")
+
+		if m.currentDir != home {
+			t.Errorf("NewDirPickerModel(\"~/\").currentDir = %q, want %q", m.currentDir, home)
+		}
+	})
+
+	t.Run("defaults are reasonable", func(t *testing.T) {
+		m := NewDirPickerModel("")
+
+		if m.selected {
+			t.Error("selected should be false by default")
+		}
+		if m.result != "" {
+			t.Errorf("result should be empty by default, got %q", m.result)
+		}
+		if m.cursor != 0 {
+			t.Errorf("cursor should be 0 by default, got %d", m.cursor)
+		}
+		if m.offset != 0 {
+			t.Errorf("offset should be 0 by default, got %d", m.offset)
+		}
+		if m.hostConfig != nil {
+			t.Error("hostConfig should be nil by default")
+		}
+		if m.loading {
+			t.Error("loading should be false by default")
+		}
+		if m.showHidden {
+			t.Error("showHidden should be false by default")
+		}
+	})
+}
+
+// --- DirPickerModel.SetRemoteHost ---
+
+func TestDirPickerModel_SetRemoteHost(t *testing.T) {
+	t.Run("sets SSH host config", func(t *testing.T) {
+		m := NewDirPickerModel("")
+		hc := &config.HostConfig{
+			ID:   "remote-dev",
+			Type: "ssh",
+			Host: "dev.example.com",
+		}
+
+		cmd := m.SetRemoteHost(hc)
+
+		if m.hostConfig == nil {
+			t.Fatal("hostConfig should be set after SetRemoteHost")
+		}
+		if m.hostConfig.ID != "remote-dev" {
+			t.Errorf("hostConfig.ID = %q, want %q", m.hostConfig.ID, "remote-dev")
+		}
+		if !m.IsRemote() {
+			t.Error("IsRemote() should return true after SetRemoteHost")
+		}
+		if !m.loading {
+			t.Error("loading should be true after SetRemoteHost")
+		}
+		if m.currentDir != "/home" {
+			t.Errorf("currentDir should be reset to /home, got %q", m.currentDir)
+		}
+		if m.cursor != 0 {
+			t.Errorf("cursor should be reset to 0, got %d", m.cursor)
+		}
+		if m.offset != 0 {
+			t.Errorf("offset should be reset to 0, got %d", m.offset)
+		}
+		if m.entries != nil {
+			t.Errorf("entries should be nil, got %v", m.entries)
+		}
+		if m.filtered != nil {
+			t.Errorf("filtered should be nil, got %v", m.filtered)
+		}
+		if cmd == nil {
+			t.Error("SetRemoteHost should return a non-nil tea.Cmd for SSH host")
+		}
+	})
+
+	t.Run("nil hostConfig is no-op", func(t *testing.T) {
+		m := NewDirPickerModel("")
+		cmd := m.SetRemoteHost(nil)
+
+		if m.hostConfig != nil {
+			t.Error("hostConfig should remain nil for nil input")
+		}
+		if cmd != nil {
+			t.Error("SetRemoteHost(nil) should return nil cmd")
+		}
+	})
+
+	t.Run("non-SSH type is no-op", func(t *testing.T) {
+		m := NewDirPickerModel("")
+		hc := &config.HostConfig{
+			ID:        "docker-dev",
+			Type:      "docker",
+			Container: "my-container",
+		}
+		cmd := m.SetRemoteHost(hc)
+
+		if m.hostConfig != nil {
+			t.Error("hostConfig should remain nil for non-SSH type")
+		}
+		if cmd != nil {
+			t.Error("SetRemoteHost with non-SSH type should return nil cmd")
+		}
+	})
+
+	t.Run("clears previous state", func(t *testing.T) {
+		m := DirPickerModel{
+			currentDir: "/some/old/dir",
+			cursor:     10,
+			offset:     5,
+			entries:    []string{"old1", "old2"},
+			filtered:   []string{"old1"},
+		}
+		hc := &config.HostConfig{
+			ID:   "new-host",
+			Type: "ssh",
+			Host: "new.example.com",
+		}
+
+		m.SetRemoteHost(hc)
+
+		if m.currentDir != "/home" {
+			t.Errorf("currentDir should be reset to /home, got %q", m.currentDir)
+		}
+		if m.cursor != 0 {
+			t.Errorf("cursor should be reset to 0, got %d", m.cursor)
+		}
+		if m.offset != 0 {
+			t.Errorf("offset should be reset to 0, got %d", m.offset)
+		}
+		if m.entries != nil {
+			t.Errorf("entries should be nil, got %v", m.entries)
+		}
+		if m.filtered != nil {
+			t.Errorf("filtered should be nil, got %v", m.filtered)
+		}
+	})
+}
