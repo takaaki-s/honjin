@@ -1,6 +1,6 @@
 # ccvalet
 
-Claude Codeの複数セッションをtmux TUIで管理するCLIツール。
+CLI tool for managing multiple Claude Code sessions via tmux TUI.
 
 ## Build & Test
 
@@ -8,7 +8,7 @@ Claude Codeの複数セッションをtmux TUIで管理するCLIツール。
 make build          # → bin/ccvalet
 make test           # go test -v ./...
 make test-race      # go test -race ./...
-make test-coverage  # カバレッジレポート生成
+make test-coverage  # Generate coverage report
 make fmt            # go fmt ./...
 make lint           # golangci-lint run ./...
 make install        # go install ./cmd/ccvalet
@@ -17,30 +17,30 @@ make install        # go install ./cmd/ccvalet
 ## Project Layout
 
 ```
-cmd/ccvalet/cmd/     Cobra CLIコマンド (root, daemon, session, tui, hook, ...)
+cmd/ccvalet/cmd/     Cobra CLI commands (root, daemon, session, tui, hook, ...)
 internal/
-  config/            Viper設定管理 (~/.ccvalet/config.yaml)
-  daemon/            Unix socket IPCサーバー/クライアント
-  session/           セッション管理 (コアドメイン, 最大モジュール)
-  tui/               BubbleTea TUI (最大コード量)
-  tmux/              tmux -L ccvalet セッション制御
-  host/              マルチホスト管理 (SSH/Docker)
-  tunnel/            SSHトンネルライフサイクル
-  notify/            デスクトップ通知 (macOS/Linux)
-  transcript/        Claude Code transcript読取 (~/.claude/projects/)
+  config/            Viper config management (~/.ccvalet/config.yaml)
+  daemon/            Unix socket IPC server/client
+  session/           Session management (core domain, largest module)
+  tui/               BubbleTea TUI (largest codebase)
+  tmux/              tmux -L ccvalet session control
+  host/              Multi-host management (SSH/Docker)
+  tunnel/            SSH tunnel lifecycle
+  notify/            Desktop notifications (macOS/Linux)
+  transcript/        Claude Code transcript reader (~/.claude/projects/)
 ```
 
 ## Docs
 
-詳細は各ファイル参照:
+See each file for details:
 
-- [docs/architecture.md](docs/architecture.md) — アーキテクチャ・依存関係・データフロー
-- [docs/conventions.md](docs/conventions.md) — コーディング規約・パターン
-- [docs/session-lifecycle.md](docs/session-lifecycle.md) — セッション状態遷移・作成・復旧
-- [docs/ipc-protocol.md](docs/ipc-protocol.md) — IPCプロトコル仕様・Action一覧
-- [docs/tui-guide.md](docs/tui-guide.md) — TUI開発ガイド・ビュー追加手順
-- [docs/adding-commands.md](docs/adding-commands.md) — 新規CLIコマンド追加手順
-- [docs/gotchas.md](docs/gotchas.md) — 既知の落とし穴・注意事項
+- [docs/architecture.md](docs/architecture.md) — Architecture, dependencies, data flow
+- [docs/conventions.md](docs/conventions.md) — Coding conventions and patterns
+- [docs/session-lifecycle.md](docs/session-lifecycle.md) — Session state transitions, creation, recovery
+- [docs/ipc-protocol.md](docs/ipc-protocol.md) — IPC protocol spec and action list
+- [docs/tui-guide.md](docs/tui-guide.md) — TUI development guide and adding views
+- [docs/adding-commands.md](docs/adding-commands.md) — Adding new CLI commands
+- [docs/gotchas.md](docs/gotchas.md) — Known pitfalls and caveats
 
 ## Debug
 
@@ -48,7 +48,7 @@ internal/
 CCVALET_DEBUG=1 ccvalet daemon start
 ```
 
-ログ: `~/.ccvalet/daemon-debug.log`, `~/.ccvalet/hook-debug.log`
+Logs: `~/.ccvalet/daemon-debug.log`, `~/.ccvalet/hook-debug.log`
 
 ## Key Dependencies
 
@@ -58,36 +58,36 @@ Go 1.24.5 / cobra (CLI) / bubbletea (TUI) / viper (config) / lipgloss (styling)
 
 ```
 ~/.ccvalet/
-  config.yaml          ユーザー設定
-  state.yaml           永続状態
-  sessions/{uuid}.json セッションデータ
+  config.yaml          User settings
+  state.yaml           Persistent state
+  sessions/{uuid}.json Session data
   run/daemon.sock      IPC Unix socket
 ```
 
 ## Claude Code Hooks
 
-`~/.claude/settings.json` に設定:
-- `UserPromptSubmit` → セッションを "thinking" に
-- `Stop` → "idle" に + タスク完了通知
-- `Notification` → "permission" に + 許可待ち通知
+Configured in `~/.claude/settings.json`:
+- `UserPromptSubmit` → Set session to "thinking"
+- `Stop` → Set to "idle" + task completion notification
+- `Notification` → Set to "permission" + permission-waiting notification
 
-詳細は README.md の「Claude Code Hooks設定」セクション参照。
+See the "Claude Code Hooks Setup" section in README.md for details.
 
 ## Commit Convention
 
-コミットメッセージはConventional Commits形式を使用する（goreleaserのchangelog生成に使用）:
-- `feat:` 新機能
-- `fix:` バグ修正
-- `refactor:` リファクタリング
-- `docs:` ドキュメント
-- `test:` テスト
-- `chore:` その他（CI、依存関係など）
+Commit messages follow Conventional Commits format (used by goreleaser for changelog generation):
+- `feat:` New feature
+- `fix:` Bug fix
+- `refactor:` Refactoring
+- `docs:` Documentation
+- `test:` Tests
+- `chore:` Other (CI, dependencies, etc.)
 
 ## Testing
 
-カバレッジ約40%。標準ライブラリのみ使用（testify等なし）。
-同一パッケージテスト（`package X`）で非公開関数もテスト可能。
-新規コードには `_test.go` を追加すること。
+Coverage ~40%. Uses only the standard library (no testify, etc.).
+Same-package tests (`package X`) allow testing unexported functions.
+Add `_test.go` files for new code.
 
-テスタビリティのため `tmux.Runner` インターフェースを導入済み（`internal/tmux/interfaces.go`）。
-session.Manager のテストでは `mockTmuxRunner`（`internal/session/mock_tmux_test.go`）を使用。
+The `tmux.Runner` interface (`internal/tmux/interfaces.go`) was introduced for testability.
+Tests for session.Manager use `mockTmuxRunner` (`internal/session/mock_tmux_test.go`).
