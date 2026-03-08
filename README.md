@@ -268,6 +268,28 @@ ccvalet uses Claude Code hooks to detect session state changes. Add the followin
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/absolute/path/to/ccvalet hook",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/absolute/path/to/ccvalet hook",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "Notification": [
       {
         "matcher": "permission_prompt|elicitation_dialog|idle_prompt",
@@ -291,6 +313,8 @@ Hook roles:
 | Hook Event | Role |
 |-----------|------|
 | `UserPromptSubmit` | User submits a prompt → set session to `thinking` |
+| `PreToolUse` | Tool execution starts → set session to `thinking` |
+| `PostToolUse` | Tool execution ends → set session to `thinking` (recovers from `permission` state) |
 | `Stop` | Claude's turn ends → set session to `idle` (send task completion notification) |
 | `Notification` | Permission request, etc. → set session to `permission` (send permission request notification) |
 

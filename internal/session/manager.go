@@ -673,7 +673,7 @@ func (m *Manager) HandleHookEvent(ccSessionID, ccvaletSessionID, eventName, noti
 	}
 
 	switch eventName {
-	case "UserPromptSubmit":
+	case "UserPromptSubmit", "PreToolUse", "PostToolUse":
 		session.Status = StatusThinking
 		session.LastOutputTime = time.Now()
 	case "Stop":
