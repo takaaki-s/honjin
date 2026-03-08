@@ -54,9 +54,9 @@ type Server struct {
 	configMgr    *config.Manager
 	stateMgr     *config.StateManager
 	listener     net.Listener
-	createMu     sync.Mutex      // セッション作成の排他制御用
-	hostRegistry *host.Registry  // マルチホスト管理
-	tunnelMgr    *tunnel.Manager // SSHトンネル管理
+	createMu     sync.Mutex      // Mutual exclusion for session creation
+	hostRegistry *host.Registry  // Multi-host management
+	tunnelMgr    *tunnel.Manager // SSH tunnel management
 }
 
 // Message types
@@ -104,7 +104,7 @@ func NewServer(socketPath, dataDir, configDir string) (*Server, error) {
 		stateMgr:   stateMgr,
 	}
 
-	// マルチホスト対応の初期化
+	// Initialize multi-host support
 	hosts := configMgr.GetHosts()
 	if len(hosts) > 0 {
 		s.tunnelMgr = tunnel.NewManager()
@@ -157,7 +157,7 @@ func (s *Server) Start() error {
 
 // Stop stops the daemon server
 func (s *Server) Stop() {
-	// トンネルをクリーンアップ
+	// Clean up tunnels
 	if s.tunnelMgr != nil {
 		s.tunnelMgr.CloseAll()
 	}
@@ -235,7 +235,7 @@ func (s *Server) handleHook(data json.RawMessage) Response {
 }
 
 func (s *Server) handleNotificationHistory() Response {
-	// ローカルの通知履歴を取得
+	// Get local notification history
 	localEntries := s.manager.NotificationHistory()
 	for i := range localEntries {
 		if localEntries[i].HostID == "" {
@@ -243,13 +243,13 @@ func (s *Server) handleNotificationHistory() Response {
 		}
 	}
 
-	// リモートホストがない場合はローカルのみ返す
+	// Return only local if no remote hosts
 	if s.hostRegistry == nil {
 		data, _ := json.Marshal(localEntries)
 		return Response{Success: true, Data: data}
 	}
 
-	// リモートの通知履歴を並列取得して統合
+	// Fetch remote notification history in parallel and merge
 	allEntries := localEntries
 	remotes := s.hostRegistry.Remotes()
 
@@ -282,7 +282,7 @@ func (s *Server) handleNotificationHistory() Response {
 		}
 	}
 
-	// Timestamp降順でソート
+	// Sort by Timestamp descending
 	sort.Slice(allEntries, func(i, j int) bool {
 		return allEntries[i].Timestamp.After(allEntries[j].Timestamp)
 	})
@@ -295,8 +295,8 @@ type NewRequest struct {
 	Name        string `json:"name"`
 	WorkDir     string `json:"work_dir"`
 	Start       bool   `json:"start"`
-	HostID      string `json:"host_id,omitempty"`       // 対象ホスト（空="local"）
-	SSHAuthSock string `json:"ssh_auth_sock,omitempty"` // SSH_AUTH_SOCK（git操作用）
+	HostID      string `json:"host_id,omitempty"`       // Target host (empty = "local")
+	SSHAuthSock string `json:"ssh_auth_sock,omitempty"` // SSH_AUTH_SOCK (for git operations)
 }
 
 func (s *Server) handleNew(data json.RawMessage) Response {
@@ -305,7 +305,7 @@ func (s *Server) handleNew(data json.RawMessage) Response {
 		return Response{Success: false, Error: err.Error()}
 	}
 
-	// リモートホスト宛の場合、該当slaveに転送
+	// Forward to the corresponding slave if destined for a remote host
 	if req.HostID != "" && req.HostID != "local" {
 		// Clear SSH_AUTH_SOCK: local socket path doesn't exist on remote host.
 		// The slave uses its own SSH_AUTH_SOCK from the SSH tunnel.
@@ -314,7 +314,7 @@ func (s *Server) handleNew(data json.RawMessage) Response {
 		return s.forwardToSlave(req.HostID, Request{Action: "new", Data: forwardData})
 	}
 
-	// 同期モード - 排他制御
+	// Synchronous mode - mutual exclusion
 	s.createMu.Lock()
 
 	sess, err := s.manager.CreateWithOptions(session.CreateOptions{
@@ -348,7 +348,7 @@ func (s *Server) handleNew(data json.RawMessage) Response {
 }
 
 func (s *Server) handleList() Response {
-	// ローカルセッション一覧を取得
+	// Get local session list
 	localSessions := s.manager.List()
 	for i := range localSessions {
 		if localSessions[i].HostID == "" {
@@ -356,13 +356,13 @@ func (s *Server) handleList() Response {
 		}
 	}
 
-	// リモートホストがない場合はローカルのみ返す
+	// Return only local if no remote hosts
 	if s.hostRegistry == nil {
 		data, _ := json.Marshal(localSessions)
 		return Response{Success: true, Data: data}
 	}
 
-	// リモートセッション一覧を並列取得して統合
+	// Fetch remote session list in parallel and merge
 	allSessions := localSessions
 	remotes := s.hostRegistry.Remotes()
 
@@ -401,7 +401,7 @@ func (s *Server) handleList() Response {
 
 type IDRequest struct {
 	ID     string `json:"id"`
-	HostID string `json:"host_id,omitempty"` // 対象ホスト（空="local"）
+	HostID string `json:"host_id,omitempty"` // Target host (empty = "local")
 }
 
 func (s *Server) handleStart(data json.RawMessage) Response {
@@ -410,7 +410,7 @@ func (s *Server) handleStart(data json.RawMessage) Response {
 		return Response{Success: false, Error: err.Error()}
 	}
 
-	// リモートホスト宛の場合、該当slaveに転送
+	// Forward to the corresponding slave if destined for a remote host
 	if req.HostID != "" && req.HostID != "local" {
 		return s.forwardToSlave(req.HostID, Request{Action: "start", Data: data})
 	}
@@ -428,7 +428,7 @@ func (s *Server) handleKill(data json.RawMessage) Response {
 		return Response{Success: false, Error: err.Error()}
 	}
 
-	// リモートホスト宛の場合、該当slaveに転送
+	// Forward to the corresponding slave if destined for a remote host
 	if req.HostID != "" && req.HostID != "local" {
 		return s.forwardToSlave(req.HostID, Request{Action: "kill", Data: data})
 	}
@@ -446,7 +446,7 @@ func (s *Server) handleDelete(data json.RawMessage) Response {
 		return Response{Success: false, Error: err.Error()}
 	}
 
-	// リモートホスト宛の場合、該当slaveに転送
+	// Forward to the corresponding slave if destined for a remote host
 	if req.HostID != "" && req.HostID != "local" {
 		return s.forwardToSlave(req.HostID, Request{Action: "delete", Data: data})
 	}
@@ -467,37 +467,37 @@ func (s *Server) handleStop() Response {
 	return Response{Success: true}
 }
 
-// --- マルチホスト対応 ---
+// --- Multi-host support ---
 
-// initRemoteSlaves はリモートホストのSlaveデーモンを起動し、トンネルを確立し、daemon clientを設定する
+// initRemoteSlaves starts slave daemons on remote hosts, establishes tunnels, and sets up daemon clients
 func (s *Server) initRemoteSlaves() {
 	if s.hostRegistry == nil || s.tunnelMgr == nil {
 		return
 	}
 
 	for _, h := range s.hostRegistry.Remotes() {
-		// Step 1: Slaveデーモンを自動起動（冪等: 既に起動済みなら何もしない）
+		// Step 1: Auto-start slave daemon (idempotent: no-op if already running)
 		if err := host.StartSlave(h.Config); err != nil {
 			debugLog("[REMOTE] Failed to start slave on %s: %v", h.ID, err)
 			continue
 		}
 		debugLog("[REMOTE] Slave started on %s", h.ID)
 
-		// Step 2: SSHトンネル/Docker接続を確立
+		// Step 2: Establish SSH tunnel / Docker connection
 		localSocket, err := s.tunnelMgr.Open(h.Config)
 		if err != nil {
 			debugLog("[REMOTE] Failed to open tunnel to %s: %v", h.ID, err)
 			continue
 		}
 
-		// Step 3: RemoteClientを作成して登録
+		// Step 3: Create and register RemoteClient
 		client := NewRemoteClient(localSocket, h.ID)
 		s.hostRegistry.SetClient(h.ID, client)
 		debugLog("[REMOTE] Connected to slave %s via %s", h.ID, localSocket)
 	}
 }
 
-// forwardToSlave はリクエストをリモートslaveに転送する
+// forwardToSlave forwards a request to a remote slave
 func (s *Server) forwardToSlave(hostID string, req Request) Response {
 	if s.hostRegistry == nil {
 		return Response{Success: false, Error: "host registry not initialized"}
@@ -512,14 +512,14 @@ func (s *Server) forwardToSlave(hostID string, req Request) Response {
 		return Response{Success: false, Error: fmt.Sprintf("host %s not connected", hostID)}
 	}
 
-	// SlaveClientインターフェースから*Clientにキャスト
+	// Cast from SlaveClient interface to *Client
 	client, ok := h.Client.(*Client)
 	if !ok {
 		return Response{Success: false, Error: fmt.Sprintf("host %s has incompatible client type", hostID)}
 	}
 
-	// host_idをリクエストデータから除去してスレーブに転送する
-	// スレーブがhost_idを見て再度forwardしようとするのを防ぐ
+	// Strip host_id from request data before forwarding to slave
+	// Prevents the slave from trying to forward again based on host_id
 	if req.Data != nil {
 		var m map[string]json.RawMessage
 		if err := json.Unmarshal(req.Data, &m); err == nil {
@@ -536,9 +536,9 @@ func (s *Server) forwardToSlave(hostID string, req Request) Response {
 	return *resp
 }
 
-// --- ホスト情報クエリ ---
+// --- Host info queries ---
 
-// HostInfo はホスト情報を表す
+// HostInfo represents host information
 type HostInfo struct {
 	ID        string `json:"id"`
 	Type      string `json:"type"`

@@ -24,7 +24,7 @@ type remoteHomeMsg struct {
 
 type remoteEntriesMsg struct {
 	entries []string
-	dir     string // リクエスト元ディレクトリ（stale検出用）
+	dir     string // Requesting directory (for stale detection)
 	err     error
 }
 
@@ -47,10 +47,10 @@ func spinnerTickCmd() tea.Cmd {
 
 // HistoryEntry represents a recently used directory for quick-select.
 type HistoryEntry struct {
-	Path        string    // フルパスまたは ~/... 形式
-	DisplayPath string    // 表示用パス（~ 展開済み）
-	LastUsedAt  time.Time // 最終利用日時
-	HostID      string    // ホストID（"local" またはリモートホストID）
+	Path        string    // Full path or ~/... format
+	DisplayPath string    // Display path (with ~ expanded)
+	LastUsedAt  time.Time // Last used timestamp
+	HostID      string    // Host ID ("local" or remote host ID)
 }
 
 // DirHistoryRemoveMsg is emitted when a history entry should be removed from persistent storage.
@@ -61,33 +61,33 @@ type DirHistoryRemoveMsg struct {
 
 // DirPickerModel is a directory browser component for selecting a working directory.
 type DirPickerModel struct {
-	currentDir string   // 現在表示中のディレクトリ
-	entries    []string // 現在のディレクトリ内のサブディレクトリ名
-	filtered   []string // フィルタ後のエントリ
-	cursor     int      // カーソル位置（履歴+ディレクトリの統合リスト上）
-	offset     int      // スクロールオフセット
+	currentDir string   // Currently displayed directory
+	entries    []string // Subdirectory names in the current directory
+	filtered   []string // Filtered entries
+	cursor     int      // Cursor position (on combined history+directory list)
+	offset     int      // Scroll offset
 
-	filterInput textinput.Model // フィルタ入力
-	showHidden  bool            // 隠しディレクトリを表示するか
+	filterInput textinput.Model // Filter input
+	showHidden  bool            // Whether to show hidden directories
 
-	selected bool   // ディレクトリが選択されたか
-	result   string // 選択されたディレクトリパス
+	selected bool   // Whether a directory was selected
+	result   string // Selected directory path
 
 	width  int
 	height int
 
 	// Remote host support
 	hostConfig *config.HostConfig // nil = local mode
-	remoteHome string             // リモートのホームディレクトリ
+	remoteHome string             // Remote home directory
 
 	// Loading state (remote)
-	loading     bool   // SSH操作実行中
-	loadingDir  string // ロード中のディレクトリ（stale検出用）
-	spinnerTick int    // スピナーフレームインデックス
+	loading     bool   // SSH operation in progress
+	loadingDir  string // Directory being loaded (for stale detection)
+	spinnerTick int    // Spinner frame index
 
 	// History (recently used directories)
-	historyDirs     []HistoryEntry // 履歴エントリ
-	filteredHistory []HistoryEntry // フィルタ後の履歴エントリ
+	historyDirs     []HistoryEntry // History entries
+	filteredHistory []HistoryEntry // Filtered history entries
 }
 
 // NewDirPickerModel creates a new directory picker starting at the given path.
@@ -131,7 +131,7 @@ func (m *DirPickerModel) SetRemoteHost(hc *config.HostConfig) tea.Cmd {
 		return nil
 	}
 	m.hostConfig = hc
-	m.currentDir = "/home" // 仮のデフォルト
+	m.currentDir = "/home" // Temporary default
 	m.cursor = 0
 	m.offset = 0
 	m.entries = nil
@@ -139,7 +139,7 @@ func (m *DirPickerModel) SetRemoteHost(hc *config.HostConfig) tea.Cmd {
 	m.loading = true
 	m.loadingDir = ""
 
-	hostConfig := *hc // クロージャ用コピー
+	hostConfig := *hc // Copy for closure
 	return tea.Batch(
 		func() tea.Msg {
 			home, err := getRemoteHome(&hostConfig)
@@ -230,7 +230,7 @@ func (m DirPickerModel) Update(msg tea.Msg) (DirPickerModel, tea.Cmd) {
 		)
 
 	case remoteEntriesMsg:
-		// stale応答を無視
+		// Ignore stale responses
 		if msg.dir != m.currentDir {
 			return m, nil
 		}
@@ -265,7 +265,7 @@ func (m DirPickerModel) Update(msg tea.Msg) (DirPickerModel, tea.Cmd) {
 	// --- Key input ---
 
 	case tea.KeyMsg:
-		// loading中はナビゲーションキーのみ許可
+		// Only allow navigation keys while loading
 		if m.loading {
 			return m, nil
 		}
@@ -276,10 +276,10 @@ func (m DirPickerModel) Update(msg tea.Msg) (DirPickerModel, tea.Cmd) {
 		case "enter":
 			if m.totalItems() > 0 && m.cursor < m.totalItems() {
 				if m.cursor < historyLen {
-					// 履歴エントリ選択: 即座にそのパスを返す
+					// History entry selected: return the path immediately
 					entry := m.filteredHistory[m.cursor]
 
-					// ローカルの場合: ディレクトリ存在チェック
+					// Local: check directory existence
 					if !m.IsRemote() {
 						checkPath := entry.Path
 						if strings.HasPrefix(checkPath, "~/") {
@@ -288,7 +288,7 @@ func (m DirPickerModel) Update(msg tea.Msg) (DirPickerModel, tea.Cmd) {
 							}
 						}
 						if info, err := os.Stat(checkPath); err != nil || !info.IsDir() {
-							// 存在しない: 表示リストから除去 + 削除メッセージを返す
+							// Does not exist: remove from display list + return remove message
 							m.removeFilteredHistoryEntry(m.cursor)
 							return m, func() tea.Msg {
 								return DirHistoryRemoveMsg{
@@ -303,7 +303,7 @@ func (m DirPickerModel) Update(msg tea.Msg) (DirPickerModel, tea.Cmd) {
 					m.result = entry.Path
 					return m, nil
 				}
-				// 通常ディレクトリに入る
+				// Enter regular directory
 				dirIdx := m.cursor - historyLen
 				if dirIdx < len(m.filtered) {
 					selected := m.filtered[dirIdx]
@@ -323,7 +323,7 @@ func (m DirPickerModel) Update(msg tea.Msg) (DirPickerModel, tea.Cmd) {
 			// Select current directory
 			m.selected = true
 			if m.IsRemote() {
-				// リモートの場合: homeプレフィックスを ~ に変換して返す
+				// Remote: convert home prefix to ~ and return
 				if m.remoteHome != "" && strings.HasPrefix(m.currentDir, m.remoteHome) {
 					m.result = "~" + m.currentDir[len(m.remoteHome):]
 					if m.result == "~" {
@@ -390,13 +390,13 @@ func (m DirPickerModel) Update(msg tea.Msg) (DirPickerModel, tea.Cmd) {
 			// Direct path navigation
 			path := val
 			if m.IsRemote() {
-				// リモート: ~ をリモートhomeに展開
+				// Remote: expand ~ to remote home
 				if strings.HasPrefix(path, "~/") && m.remoteHome != "" {
 					path = filepath.Join(m.remoteHome, path[2:])
 				} else if path == "~" && m.remoteHome != "" {
 					path = m.remoteHome
 				}
-				// リモートでディレクトリ存在チェック（非同期）
+				// Check directory existence on remote (async)
 				hc := *m.hostConfig
 				checkPath := path
 				return m, tea.Batch(cmd, func() tea.Msg {
@@ -404,7 +404,7 @@ func (m DirPickerModel) Update(msg tea.Msg) (DirPickerModel, tea.Cmd) {
 					return remoteDirExistsMsg{path: checkPath, exists: exists}
 				})
 			} else {
-				// ローカル
+				// Local
 				if strings.HasPrefix(path, "~/") {
 					if home, err := os.UserHomeDir(); err == nil {
 						path = filepath.Join(home, path[2:])
@@ -436,7 +436,7 @@ func (m DirPickerModel) View() string {
 	pathStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7aa2f7"))
 	displayPath := m.currentDir
 	if m.IsRemote() {
-		// リモート: homeプレフィックスを ~ に変換
+		// Remote: convert home prefix to ~
 		if m.remoteHome != "" && strings.HasPrefix(displayPath, m.remoteHome) {
 			displayPath = "~" + displayPath[len(m.remoteHome):]
 		}
@@ -510,7 +510,7 @@ func (m DirPickerModel) View() string {
 			b.WriteString("  " + dimStyle.Render("(empty)"))
 			b.WriteString("\n")
 		} else {
-			// スクロール計算（履歴セクションの高さを考慮）
+			// Scroll calculation (accounting for history section height)
 			// historyHeight = historyLen (entries) + 1 (header) if historyLen > 0
 			historyHeight := 0
 			if historyLen > 0 {
@@ -521,7 +521,7 @@ func (m DirPickerModel) View() string {
 				dirVisibleLines = 3
 			}
 
-			// ディレクトリ部分のスクロールオフセット計算
+			// Calculate scroll offset for directory section
 			dirOffset := 0
 			if m.cursor >= historyLen {
 				dirCursor := m.cursor - historyLen
@@ -692,7 +692,7 @@ func (m *DirPickerModel) removeFilteredHistoryEntry(idx int) {
 	removed := m.filteredHistory[idx]
 	m.filteredHistory = append(m.filteredHistory[:idx], m.filteredHistory[idx+1:]...)
 
-	// historyDirsからも除去
+	// Also remove from historyDirs
 	for i, h := range m.historyDirs {
 		if h.Path == removed.Path && h.HostID == removed.HostID {
 			m.historyDirs = append(m.historyDirs[:i], m.historyDirs[i+1:]...)

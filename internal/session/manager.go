@@ -190,8 +190,8 @@ func NewManager(dataDir, configDir string, configMgr *config.Manager) (*Manager,
 
 // CreateOptions contains options for creating a new session
 type CreateOptions struct {
-	WorkDir string // ワークディレクトリパス
-	Name    string // セッション名（省略時: ディレクトリのbasename）
+	WorkDir string // Working directory path
+	Name    string // Session name (defaults to directory basename)
 }
 
 // CreateWithOptions creates a new session with full options
@@ -199,12 +199,12 @@ func (m *Manager) CreateWithOptions(opts CreateOptions) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// WorkDirは必須
+	// WorkDir is required
 	if opts.WorkDir == "" {
 		return nil, fmt.Errorf("work directory is required")
 	}
 
-	// 重複ディレクトリチェック
+	// Check for duplicate directories
 	for _, s := range m.sessions {
 		if s.WorkDir == opts.WorkDir {
 			return nil, fmt.Errorf("session already exists for directory: %s (session: %s)", opts.WorkDir, s.Name)
@@ -213,13 +213,13 @@ func (m *Manager) CreateWithOptions(opts CreateOptions) (*Session, error) {
 
 	id := uuid.New().String() // Full UUID for Claude Code --session-id compatibility
 
-	// セッション名の決定（デフォルト: ディレクトリのbasename）
+	// Determine session name (default: directory basename)
 	name := opts.Name
 	if name == "" {
 		name = filepath.Base(opts.WorkDir)
 	}
 
-	// セッション名の一意性チェック
+	// Check session name uniqueness
 	for _, s := range m.sessions {
 		if s.Name == name {
 			return nil, fmt.Errorf("session with name '%s' already exists. Use --name to specify a different name", name)
@@ -316,7 +316,7 @@ func (m *Manager) SetWorkDir(id string, workDir string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// 重複チェック（Asyncモードでの競合を防ぐ）
+	// Duplicate check (prevents conflicts in async mode)
 	if workDir != "" {
 		for _, s := range m.sessions {
 			if s.ID != id && s.WorkDir == workDir {
@@ -422,7 +422,7 @@ func (m *Manager) startSessionTmux(session *Session) error {
 	// Expand ~ in WorkDir for tmux -c flag and trust state check
 	expandedWorkDir := expandTilde(session.WorkDir)
 
-	// WorkDirが存在しない場合はエラー（worktree削除後などに発生しうる）
+	// Error if WorkDir does not exist (can happen after worktree deletion etc.)
 	if info, err := os.Stat(expandedWorkDir); err != nil || !info.IsDir() {
 		return fmt.Errorf("work directory does not exist: %s (may have been deleted, e.g. git worktree removed)", session.WorkDir)
 	}
@@ -549,15 +549,15 @@ func (m *Manager) captureOutputTmux(session *Session) {
 		// Check if pane process has exited
 		if m.tmuxClient.IsPaneDead(target) {
 			m.mu.Lock()
-			// セッションが削除済みの場合はsaveせず終了
+			// Exit without saving if session was already deleted
 			if _, exists := m.sessions[session.ID]; !exists {
 				m.mu.Unlock()
 				debugLog("[TMUX] Session %s pane died but session already deleted, skipping save", sessionName)
 				return
 			}
 
-			// claude --resume が即座に失敗した場合（起動後10秒以内）、
-			// 新しいセッションIDでプレーンな claude を自動リスタートする
+			// If claude --resume fails immediately (within 10 seconds of startup),
+			// auto-restart with a fresh session ID using plain claude
 			if session.ClaudeSessionStarted && time.Since(session.StartedAt) < 10*time.Second {
 				debugLog("[TMUX] Session %s pane died quickly (resume likely failed), retrying with fresh claude", session.Name)
 				newSessionID := uuid.New().String()
@@ -605,7 +605,7 @@ func (m *Manager) captureOutputTmux(session *Session) {
 			if currentPath != "" {
 				m.mu.Lock()
 				session.CurrentWorkDir = currentPath
-				// WorkDirが変わった場合は永続化更新（worktreeへのcd等に追従）
+				// Update persistence if WorkDir changed (follows cd to worktree etc.)
 				workDirChanged := session.WorkDir != currentPath
 				if workDirChanged {
 					session.WorkDir = currentPath

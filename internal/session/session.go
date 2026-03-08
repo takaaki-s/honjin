@@ -8,12 +8,12 @@ import (
 type Status string
 
 const (
-	StatusCreating   Status = "creating"   // CC起動中
-	StatusStopped    Status = "stopped"    // プロセス停止
-	StatusRunning    Status = "running"    // 実行中（詳細不明）
-	StatusIdle       Status = "idle"       // 入力待ち（Stop hook）
-	StatusThinking   Status = "thinking"   // 処理中（UserPromptSubmit hook）
-	StatusPermission Status = "permission" // 許可待ち（Notification hook）
+	StatusCreating   Status = "creating"   // CC starting up
+	StatusStopped    Status = "stopped"    // Process stopped
+	StatusRunning    Status = "running"    // Running (details unknown)
+	StatusIdle       Status = "idle"       // Waiting for input (Stop hook)
+	StatusThinking   Status = "thinking"   // Processing (UserPromptSubmit hook)
+	StatusPermission Status = "permission" // Waiting for permission (Notification hook)
 )
 
 // Session represents a Claude Code session
@@ -24,32 +24,32 @@ type Session struct {
 	CreatedAt time.Time `json:"created_at"`
 	Status    Status    `json:"status"`
 
-	// 最終アクティブ時刻（永続化）
+	// Last active time (persisted)
 	LastActiveAt time.Time `json:"last_active_at,omitempty"`
 
-	// エラー情報
-	ErrorMessage string `json:"error_message,omitempty"` // エラー時のメッセージ
+	// Error info
+	ErrorMessage string `json:"error_message,omitempty"` // Error message
 
-	// Claude Code セッションID（復元用）
+	// Claude Code session ID (for restoration)
 	ClaudeSessionID      string `json:"claude_session_id,omitempty"`
-	ClaudeSessionStarted bool   `json:"claude_session_started,omitempty"` // CCセッションが一度でも起動されたか
+	ClaudeSessionStarted bool   `json:"claude_session_started,omitempty"` // Whether the CC session has been started at least once
 
-	// ホスト情報（マルチホスト対応）
-	HostID string `json:"host_id,omitempty"` // ホスト識別子 ("local", "ec2", "docker-dev" 等)
+	// Host info (multi-host support)
+	HostID string `json:"host_id,omitempty"` // Host identifier ("local", "ec2", "docker-dev", etc.)
 
 	// tmux integration
 	TmuxWindowName string `json:"tmux_window_name,omitempty"` // tmux window name for this session
 	TmuxPaneID     string `json:"tmux_pane_id,omitempty"`     // CC pane ID (e.g., "%42") for capture-pane
 
 	// Runtime fields (not persisted)
-	LastOutputTime time.Time `json:"-"` // 最後にPTY出力を受信した時刻（idle安定性検出用）
-	StartedAt      time.Time `json:"-"` // プロセス起動時刻（起動直後のエラー誤検出防止用）
-	SSHAuthSock    string    `json:"-"` // SSH_AUTH_SOCK（git操作用、永続化しない）
+	LastOutputTime time.Time `json:"-"` // Last PTY output received (for idle stability detection)
+	StartedAt      time.Time `json:"-"` // Process start time (prevents false error detection right after startup)
+	SSHAuthSock    string    `json:"-"` // SSH_AUTH_SOCK (for git operations, not persisted)
 
 	// Tracked runtime fields (not persisted, updated by daemon polling)
-	CurrentWorkDir string `json:"-"` // 現在のワークディレクトリ（tmux pane_current_path）
-	CurrentBranch  string `json:"-"` // 現在のgitブランチ
-	IsGitRepo      bool   `json:"-"` // CurrentWorkDirがgitリポジトリ内か
+	CurrentWorkDir string `json:"-"` // Current working directory (tmux pane_current_path)
+	CurrentBranch  string `json:"-"` // Current git branch
+	IsGitRepo      bool   `json:"-"` // Whether CurrentWorkDir is inside a git repository
 }
 
 // Info returns session information for display
@@ -63,11 +63,11 @@ type Info struct {
 	ErrorMessage    string    `json:"error_message,omitempty"`
 	ClaudeSessionID string    `json:"claude_session_id,omitempty"` // Claude Code session ID for transcript lookup
 	TmuxWindowName  string    `json:"tmux_window_name,omitempty"`  // tmux window name
-	HostID          string    `json:"host_id,omitempty"`           // ホスト識別子
+	HostID          string    `json:"host_id,omitempty"`           // Host identifier
 
 	// Tracked fields (dynamic, from daemon polling)
-	CurrentWorkDir string `json:"current_work_dir,omitempty"` // 現在のワークディレクトリ
-	CurrentBranch  string `json:"current_branch,omitempty"`   // 現在のgitブランチ
+	CurrentWorkDir string `json:"current_work_dir,omitempty"` // Current working directory
+	CurrentBranch  string `json:"current_branch,omitempty"`   // Current git branch
 
 	// Last messages from transcript
 	LastUserMessage      string `json:"last_user_message,omitempty"`      // Last user message content (truncated)

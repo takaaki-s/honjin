@@ -47,8 +47,8 @@ func EnsureSSHMaster(hostConfig config.HostConfig) error {
 	return exec.Command("ssh", args...).Run()
 }
 
-// AttachCommand はホストタイプに応じたtmux attachコマンドを生成する
-// tmuxTarget は "ccvalet:sess-xxx" のようなtmuxターゲット文字列
+// AttachCommand generates a tmux attach command based on host type.
+// tmuxTarget is a tmux target string like "ccvalet:sess-xxx".
 func AttachCommand(hostConfig config.HostConfig, tmuxTarget string) *exec.Cmd {
 	switch hostConfig.Type {
 	case "ssh":
@@ -56,21 +56,21 @@ func AttachCommand(hostConfig config.HostConfig, tmuxTarget string) *exec.Cmd {
 	case "docker":
 		return dockerAttachCommand(hostConfig, tmuxTarget)
 	default:
-		// ローカル: 直接tmuxのselect-windowを使う
+		// Local: use tmux select-window directly
 		return exec.Command("tmux", "-L", "ccvalet", "select-window", "-t", tmuxTarget)
 	}
 }
 
-// AttachCommandString はホストタイプに応じたtmux attachコマンド文字列を生成する
-// respawn-pane で実行するためのコマンド文字列を返す
+// AttachCommandString generates a tmux attach command string based on host type.
+// Returns a command string for execution via respawn-pane.
 func AttachCommandString(hostConfig config.HostConfig, tmuxTarget string) string {
 	switch hostConfig.Type {
 	case "ssh":
 		remoteCmd := fmt.Sprintf("tmux -L ccvalet attach -t %s", tmuxTarget)
 		ctrlPath := SSHControlPath(hostConfig.ID)
-		// ControlMaster=no: スレーブ専用（マスターはEnsureSSHMasterで事前に起動済み）
-		// ControlPath: マスターのソケットを参照してSSH多重化（接続がほぼ即座になる）
-		// ClearAllForwardings=yes: ssh_configのLocalForward/RemoteForwardのポート競合を回避
+		// ControlMaster=no: slave-only (master is pre-started via EnsureSSHMaster)
+		// ControlPath: reference master socket for SSH multiplexing (near-instant connection)
+		// ClearAllForwardings=yes: avoid port conflicts from LocalForward/RemoteForward in ssh_config
 		cmd := fmt.Sprintf("ssh -o ControlMaster=no -o ControlPath=%s -o ClearAllForwardings=yes", ctrlPath)
 		for _, opt := range hostConfig.SSHOpts {
 			cmd += " " + opt

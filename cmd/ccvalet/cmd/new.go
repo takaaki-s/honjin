@@ -26,7 +26,7 @@ For interactive session creation, use 'ccvalet ui' (TUI).`,
 		hostID, _ := cmd.Flags().GetString("host")
 		noStart, _ := cmd.Flags().GetBool("no-start")
 
-		// WorkDirのデフォルト: カレントディレクトリ
+		// Default WorkDir: current directory
 		if workDir == "" {
 			var err error
 			workDir, err = os.Getwd()
@@ -35,7 +35,7 @@ For interactive session creation, use 'ccvalet ui' (TUI).`,
 			}
 		}
 
-		// WorkDirの存在チェック（リモートホストの場合はスキップ）
+		// Check WorkDir existence (skip for remote hosts)
 		if hostID == "" || hostID == "local" {
 			if info, err := os.Stat(workDir); err != nil {
 				return fmt.Errorf("work directory does not exist: %s", workDir)
@@ -44,8 +44,8 @@ For interactive session creation, use 'ccvalet ui' (TUI).`,
 			}
 		}
 
-		// リモートホストの場合、ローカルのhomeプレフィックスを ~ に変換
-		// （シェルが ~/path を /Users/xxx/path に展開してしまうため）
+		// For remote hosts, convert local home prefix to ~
+		// (because the shell expands ~/path to /Users/xxx/path)
 		if hostID != "" && hostID != "local" {
 			if home, err := os.UserHomeDir(); err == nil {
 				if workDir == home {

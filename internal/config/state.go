@@ -10,29 +10,29 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// maxDirHistory はディレクトリ履歴の最大保存件数
+// maxDirHistory is the maximum number of directory history entries
 const maxDirHistory = 20
 
-// DirHistoryEntry はディレクトリ使用履歴の1エントリを表す
+// DirHistoryEntry represents a single directory usage history entry
 type DirHistoryEntry struct {
 	Path       string    `yaml:"path"`
 	HostID     string    `yaml:"host_id"`
 	LastUsedAt time.Time `yaml:"last_used_at"`
 }
 
-// State はアプリケーションの状態を表す（設定ではない永続的な状態）
+// State represents the application state (persistent state, not configuration)
 type State struct {
 	DirHistory []DirHistoryEntry `yaml:"dir_history,omitempty"`
 }
 
-// StateManager は状態ファイルの読み書きを管理する
+// StateManager manages reading and writing state files
 type StateManager struct {
 	mu       sync.RWMutex
 	state    *State
 	filePath string
 }
 
-// NewStateManager は新しい状態マネージャを作成する
+// NewStateManager creates a new state manager
 func NewStateManager(dataDir string) (*StateManager, error) {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, err
@@ -44,7 +44,7 @@ func NewStateManager(dataDir string) (*StateManager, error) {
 	}
 
 	if err := m.load(); err != nil {
-		// ファイルが存在しない場合は空の状態を使用
+		// Use empty state if file does not exist
 		if !os.IsNotExist(err) {
 			return nil, err
 		}
@@ -53,7 +53,7 @@ func NewStateManager(dataDir string) (*StateManager, error) {
 	return m, nil
 }
 
-// load は状態ファイルを読み込む
+// load reads the state file
 func (m *StateManager) load() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -72,14 +72,14 @@ func (m *StateManager) load() error {
 	return nil
 }
 
-// Save は状態をファイルに保存する
+// Save writes the state to file
 func (m *StateManager) Save() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.saveLocked()
 }
 
-// saveLocked はロック取得済み前提で状態を保存する
+// saveLocked saves the state (caller must hold the lock)
 func (m *StateManager) saveLocked() error {
 	data, err := yaml.Marshal(m.state)
 	if err != nil {
@@ -88,9 +88,9 @@ func (m *StateManager) saveLocked() error {
 	return os.WriteFile(m.filePath, data, 0644)
 }
 
-// RecordDirUsage はディレクトリ使用履歴を記録する。
-// 同じ(hostID, path)が既にあればLastUsedAtを更新、なければ追加する。
-// 全体でmaxDirHistory件を超えた場合は古いものから削除する。
+// RecordDirUsage records directory usage history.
+// Updates LastUsedAt if the same (hostID, path) already exists, otherwise adds a new entry.
+// Removes oldest entries if the total exceeds maxDirHistory.
 func (m *StateManager) RecordDirUsage(hostID, path string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -112,12 +112,12 @@ func (m *StateManager) RecordDirUsage(hostID, path string) error {
 		})
 	}
 
-	// LastUsedAt降順ソート
+	// Sort by LastUsedAt descending
 	sort.Slice(m.state.DirHistory, func(i, j int) bool {
 		return m.state.DirHistory[i].LastUsedAt.After(m.state.DirHistory[j].LastUsedAt)
 	})
 
-	// 上限を超えたら切り詰め
+	// Trim if exceeding the limit
 	if len(m.state.DirHistory) > maxDirHistory {
 		m.state.DirHistory = m.state.DirHistory[:maxDirHistory]
 	}
@@ -125,8 +125,8 @@ func (m *StateManager) RecordDirUsage(hostID, path string) error {
 	return m.saveLocked()
 }
 
-// GetDirHistory は指定ホストのディレクトリ使用履歴を返す。
-// LastUsedAt降順、最大maxEntries件。
+// GetDirHistory returns directory usage history for the specified host.
+// Sorted by LastUsedAt descending, up to maxEntries.
 func (m *StateManager) GetDirHistory(hostID string, maxEntries int) []DirHistoryEntry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -143,7 +143,7 @@ func (m *StateManager) GetDirHistory(hostID string, maxEntries int) []DirHistory
 	return result
 }
 
-// RemoveDirHistory は指定のディレクトリ履歴エントリを削除する。
+// RemoveDirHistory removes the specified directory history entry.
 func (m *StateManager) RemoveDirHistory(hostID, path string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

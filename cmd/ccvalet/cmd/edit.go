@@ -48,7 +48,7 @@ Examples:
 			editor = "vim"
 		}
 
-		// ターミナル状態を保存（エディタ終了後に復元するため）
+		// Save terminal state (to restore after editor exits)
 		oldState, err := term.GetState(int(os.Stdin.Fd()))
 		if err != nil {
 			oldState = nil
@@ -62,7 +62,7 @@ Examples:
 
 		runErr := editorCmd.Run()
 
-		// ターミナル状態を復元
+		// Restore terminal state
 		if oldState != nil {
 			_ = term.Restore(int(os.Stdin.Fd()), oldState)
 		}

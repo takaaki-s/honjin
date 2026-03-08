@@ -43,7 +43,7 @@ type KeyMap struct {
 	Vscode        key.Binding
 	Notifications key.Binding
 
-	// セッション作成フォーム
+	// Session creation form
 	NextField      key.Binding
 	PrevField      key.Binding
 	Submit key.Binding
@@ -136,45 +136,45 @@ type Model struct {
 	width    int
 	height   int
 	err      error
-	keys     KeyMap // キーバインド設定
+	keys     KeyMap // Keybinding settings
 
 	// Config manager (used for remote session attach)
 	configMgr *config.Manager
 
 	// Pagination
-	currentPage int // 現在のページ（0-indexed）
+	currentPage int // Current page (0-indexed)
 
 	// Delete confirmation
-	confirmDelete      bool   // 削除確認中かどうか
-	deleteTargetID     string // 削除対象のセッションID
-	deleteTargetName   string // 削除対象のセッション名（表示用）
-	deleteTargetHostID string // 削除対象のホストID
+	confirmDelete      bool   // Whether delete confirmation is active
+	deleteTargetID     string // Session ID to delete
+	deleteTargetName   string // Session name to delete (for display)
+	deleteTargetHostID string // Host ID of session to delete
 
 	// Kill confirmation
-	confirmKill      bool   // Kill確認中かどうか
-	killTargetID     string // Kill対象のセッションID
-	killTargetName   string // Kill対象のセッション名（表示用）
-	killTargetHostID string // Kill対象のホストID
+	confirmKill      bool   // Whether kill confirmation is active
+	killTargetID     string // Session ID to kill
+	killTargetName   string // Session name to kill (for display)
+	killTargetHostID string // Host ID of session to kill
 
 	// Focus tracking (for visual focus indicator)
 	focused bool // true when TUI pane has focus (changes border/title color)
 
 	// tmux integration
 	tmuxClient       *tmux.Client // outer tmux client (-L ccvalet-mgr, nil in legacy mode)
-	tuiPaneID        string       // TUIペインの固有ID (例: "%42") in outer tmux
-	displayPaneID    string       // 右ペインの固有ID (セッション表示用) in outer tmux
-	currentSessionID string       // 現在右ペインに表示中のセッションID
-	switchSeq        int          // カーソル移動デバウンス用シーケンス番号
+	tuiPaneID        string       // TUI pane unique ID (e.g. "%42") in outer tmux
+	displayPaneID    string       // Right pane unique ID (for session display) in outer tmux
+	currentSessionID string       // Session ID currently displayed in right pane
+	switchSeq        int          // Sequence number for cursor movement debounce
 
 	// Focus after create
-	focusSessionID string // 作成後にフォーカスするセッションID
+	focusSessionID string // Session ID to focus after creation
 
 	// Reswitch after delete/kill
-	needsReswitch bool // 削除/Kill後にカーソル位置のセッションに再接続
+	needsReswitch bool // Reconnect to session at cursor after delete/kill
 
 	// Processing indicator
-	processingMsg    string // 処理中メッセージ（空でない時はオーバーレイ表示）
-	waitingForResize bool   // WindowSizeMsg到着を待っている（ZoomPane後のリサイズ完了待ち）
+	processingMsg    string // Processing message (overlay displayed when non-empty)
+	waitingForResize bool   // Waiting for WindowSizeMsg (resize completion after ZoomPane)
 
 	// Search/Filter mode
 	searching        bool            // true when search mode is active
@@ -469,7 +469,7 @@ func (m *Model) openVSCode(sess *session.Info) {
 		return
 	}
 
-	// リモートセッション（SSH）
+	// Remote session (SSH)
 	if sess.HostID != "" && sess.HostID != "local" {
 		if m.configMgr == nil {
 			return
@@ -482,7 +482,7 @@ func (m *Model) openVSCode(sess *session.Info) {
 		return
 	}
 
-	// ローカルセッション
+	// Local session
 	_ = exec.Command("code", workDir).Start()
 }
 
@@ -548,8 +548,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = m.tmuxClient.ResizePaneWidth(m.tuiPaneID, minTUIWidth)
 			}
 		}
-		// ZoomPane後のリサイズ完了を検知
-		// WindowSizeMsgが届いた = ペインサイズが確定した → processingMsgをクリアして再描画
+		// Detect resize completion after ZoomPane
+		// WindowSizeMsg arrived = pane size is finalized → clear processingMsg and redraw
 		if m.waitingForResize {
 			m.waitingForResize = false
 			m.processingMsg = ""
@@ -567,7 +567,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// 処理中はキー入力を無視し、完了メッセージのみ処理
+	// Ignore key input while processing, only handle completion messages
 	if m.processingMsg != "" {
 		switch msg.(type) {
 		case tea.KeyMsg:
@@ -581,7 +581,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// 削除確認モード中の処理
+		// Handle delete confirmation mode
 		if m.confirmDelete {
 			switch msg.String() {
 			case "y", "Y", "enter":
@@ -617,7 +617,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Kill確認モード中の処理
+		// Handle kill confirmation mode
 		if m.confirmKill {
 			switch msg.String() {
 			case "y", "Y", "enter":
@@ -761,7 +761,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			pageSessions := m.getPageSessions()
 			if len(pageSessions) > 0 && m.cursor < len(pageSessions) {
 				sess := pageSessions[m.cursor]
-				// 確認モードに入る
+				// Enter confirmation mode
 				m.confirmKill = true
 				m.killTargetID = sess.ID
 				m.killTargetName = sess.Name
@@ -773,7 +773,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			pageSessions := m.getPageSessions()
 			if len(pageSessions) > 0 && m.cursor < len(pageSessions) {
 				sess := pageSessions[m.cursor]
-				// 確認モードに入る
+				// Enter confirmation mode
 				m.confirmDelete = true
 				m.deleteTargetID = sess.ID
 				m.deleteTargetName = sess.Name
@@ -841,7 +841,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.applySearchFilter()
 		}
 
-		// 作成直後のセッションにフォーカス＋右ペイン切り替え
+		// Focus on newly created session + switch right pane
 		if m.focusSessionID != "" {
 			// Clear search to show the newly created session
 			m.searching = false
@@ -853,7 +853,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if s.ID == m.focusSessionID {
 					m.currentPage = i / itemsPerPage
 					m.cursor = i % itemsPerPage
-					m.currentSessionID = "" // 強制リセットで switchToSession を実行
+					m.currentSessionID = "" // Force reset to execute switchToSession
 					m.switchToSession(s.ID)
 					break
 				}
@@ -865,15 +865,15 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cursor >= len(displaySessions) && m.cursor > 0 {
 			m.cursor = len(displaySessions) - 1
 		}
-		// 削除/Kill後にカーソル位置のセッションに再接続
+		// Reconnect to session at cursor after delete/kill
 		if m.needsReswitch {
 			m.needsReswitch = false
-			m.currentSessionID = "" // 強制リセット
+			m.currentSessionID = "" // Force reset
 			pageSessions := m.getPageSessions()
 			if len(pageSessions) > 0 && m.cursor < len(pageSessions) {
 				m.switchToSession(pageSessions[m.cursor].ID)
 			} else {
-				// セッションがなくなった場合はplaceholderに戻す
+				// Return to placeholder if no sessions remain
 				if m.tmuxClient != nil && m.displayPaneID != "" {
 					_ = m.tmuxClient.RespawnPane(m.displayPaneID, tmux.PlaceholderCmd)
 				}
@@ -881,9 +881,9 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.processingMsg = ""
 			return m, nil
 		}
-		// セッションが空になった場合は右ペインをplaceholderにリセット
-		// currentSessionIDが空でも右ペインに古い表示が残っている場合があるため、
-		// 初回のみRespawnPaneを実行し、以降はスキップするために"_empty"をセットする
+		// Reset right pane to placeholder when sessions become empty
+		// Even with empty currentSessionID, stale content may remain in right pane,
+		// so run RespawnPane only once and set "_empty" to skip subsequent calls
 		if len(m.sessions) == 0 {
 			if m.currentSessionID != "_empty" {
 				m.currentSessionID = "_empty"
@@ -894,7 +894,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.processingMsg = ""
 			return m, nil
 		}
-		// ポーリングで現在表示中のセッションが消えた場合に右ペインをリセット
+		// Reset right pane when the currently displayed session disappears during polling
 		if m.currentSessionID != "" {
 			found := false
 			for _, s := range m.sessions {
@@ -917,7 +917,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case resizeSettledMsg:
-		// フォールバック: WindowSizeMsgが来なかった場合（ペインサイズ変更なし）
+		// Fallback: WindowSizeMsg did not arrive (no pane size change)
 		if m.waitingForResize {
 			m.waitingForResize = false
 			m.processingMsg = ""
@@ -961,7 +961,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the UI
 func (m Model) View() string {
-	// 処理中インジケーター
+	// Processing indicator
 	if m.processingMsg != "" {
 		return m.renderProcessingView()
 	}
@@ -981,7 +981,7 @@ func (m Model) View() string {
 }
 
 // renderProcessingView renders a processing indicator.
-// サイズ非依存: ZoomPane/JoinPane後のWindowSizeMsg到着前でも正しく表示される
+// Size-independent: renders correctly even before WindowSizeMsg arrives after ZoomPane/JoinPane
 func (m Model) renderProcessingView() string {
 	return "\n  ⟳ " + m.processingMsg
 }

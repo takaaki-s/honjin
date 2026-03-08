@@ -11,11 +11,11 @@ import (
 	"github.com/spf13/viper"
 )
 
-// supportedDetachKeys はサポートされるdetachキーの一覧
+// supportedDetachKeys is the list of supported detach keys
 var supportedDetachKeys = []string{"ctrl+^", "ctrl+]", "ctrl+\\", "ctrl+g"}
 
-// ValidateDetachKey はdetachキーがサポートされているか検証する
-// サポート外の場合はサポートキー一覧を含むerrorを返す
+// ValidateDetachKey checks whether the detach key is supported.
+// Returns an error listing supported keys if the key is not supported.
 func ValidateDetachKey(key string) error {
 	for _, k := range supportedDetachKeys {
 		if key == k {
@@ -26,9 +26,9 @@ func ValidateDetachKey(key string) error {
 		key, strings.Join(supportedDetachKeys, ", "))
 }
 
-// KeybindingsConfig はキーバインド設定を表す
+// KeybindingsConfig represents keybinding settings
 type KeybindingsConfig struct {
-	// セッション一覧画面
+	// Session list screen
 	Up            []string `mapstructure:"up,omitempty"`
 	Down          []string `mapstructure:"down,omitempty"`
 	Attach        []string `mapstructure:"attach,omitempty"`
@@ -42,33 +42,33 @@ type KeybindingsConfig struct {
 	Vscode        []string `mapstructure:"vscode,omitempty"`
 	Notifications []string `mapstructure:"notifications,omitempty"`
 
-	// セッション作成フォーム
+	// Session creation form
 	NextField      []string `mapstructure:"next_field,omitempty"`
 	PrevField      []string `mapstructure:"prev_field,omitempty"`
 	Submit []string `mapstructure:"submit,omitempty"`
 	CancelForm     []string `mapstructure:"cancel_form,omitempty"`
 
-	// アタッチ中のキー
+	// Keys while attached
 	Detach []string `mapstructure:"detach,omitempty"`
 }
 
-// HostConfig はリモートホストの設定を表す
+// HostConfig represents a remote host configuration
 type HostConfig struct {
-	ID         string   `mapstructure:"id"`                    // ホスト識別子 (例: "ec2", "docker-dev")
+	ID         string   `mapstructure:"id"`                    // Host identifier (e.g., "ec2", "docker-dev")
 	Type       string   `mapstructure:"type"`                  // "ssh" or "docker"
-	Host       string   `mapstructure:"host,omitempty"`        // SSH接続先 (例: "ec2-host")
-	SSHOpts    []string `mapstructure:"ssh_opts,omitempty"`    // 追加SSHオプション
-	Container  string   `mapstructure:"container,omitempty"`   // Dockerコンテナ名/ID
-	SocketPath string   `mapstructure:"socket_path,omitempty"` // リモート側ソケットパス (デフォルト: ~/.ccvalet/run/daemon.sock)
+	Host       string   `mapstructure:"host,omitempty"`        // SSH target (e.g., "ec2-host")
+	SSHOpts    []string `mapstructure:"ssh_opts,omitempty"`    // Additional SSH options
+	Container  string   `mapstructure:"container,omitempty"`   // Docker container name/ID
+	SocketPath string   `mapstructure:"socket_path,omitempty"` // Remote socket path (default: ~/.ccvalet/run/daemon.sock)
 }
 
-// Config はアプリケーション全体の設定を表す
+// Config represents the application-wide configuration
 type Config struct {
-	Keybindings KeybindingsConfig `mapstructure:"keybindings,omitempty"` // キーバインド設定
-	Hosts       []HostConfig      `mapstructure:"hosts,omitempty"`       // リモートホスト設定
+	Keybindings KeybindingsConfig `mapstructure:"keybindings,omitempty"` // Keybinding settings
+	Hosts       []HostConfig      `mapstructure:"hosts,omitempty"`       // Remote host settings
 }
 
-// Manager は設定ファイルの読み書きを管理する
+// Manager manages reading and writing configuration files
 type Manager struct {
 	v        *viper.Viper
 	mu       sync.RWMutex
@@ -76,7 +76,7 @@ type Manager struct {
 	filePath string
 }
 
-// NewManager は新しい設定マネージャを作成する
+// NewManager creates a new configuration manager
 func NewManager(dataDir string) (*Manager, error) {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, err
@@ -94,7 +94,7 @@ func NewManager(dataDir string) (*Manager, error) {
 	}
 
 	if err := m.load(); err != nil {
-		// ファイルが存在しない場合はデフォルト設定を使用
+		// Use default settings if file does not exist
 		if !os.IsNotExist(err) {
 			if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 				return nil, err
@@ -105,12 +105,12 @@ func NewManager(dataDir string) (*Manager, error) {
 	return m, nil
 }
 
-// defaultConfig はデフォルト設定を返す
+// defaultConfig returns the default configuration
 func defaultConfig() *Config {
 	return &Config{}
 }
 
-// load は設定ファイルを読み込む
+// load reads the configuration file
 func (m *Manager) load() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -128,7 +128,7 @@ func (m *Manager) load() error {
 	return nil
 }
 
-// Reload は設定ファイルを再読み込みする
+// Reload re-reads the configuration file
 func (m *Manager) Reload() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -146,7 +146,7 @@ func (m *Manager) Reload() error {
 	return nil
 }
 
-// Save は設定をファイルに保存する
+// Save writes the configuration to file
 func (m *Manager) Save() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -154,7 +154,7 @@ func (m *Manager) Save() error {
 	return m.v.WriteConfigAs(m.filePath)
 }
 
-// Get は現在の設定を返す
+// Get returns the current configuration
 func (m *Manager) Get() *Config {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -163,7 +163,7 @@ func (m *Manager) Get() *Config {
 	return &cfg
 }
 
-// GetHosts はリモートホスト一覧を返す
+// GetHosts returns the list of remote hosts
 func (m *Manager) GetHosts() []HostConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -173,7 +173,7 @@ func (m *Manager) GetHosts() []HostConfig {
 	return hosts
 }
 
-// GetHost は指定したIDのホストを返す
+// GetHost returns the host with the given ID
 func (m *Manager) GetHost(id string) *HostConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -187,8 +187,8 @@ func (m *Manager) GetHost(id string) *HostConfig {
 	return nil
 }
 
-// GetShell はClaude Code起動時のシェルを返す
-// 環境変数$SHELLを使用、未設定時は/bin/sh
+// GetShell returns the shell to use when launching Claude Code.
+// Uses the $SHELL environment variable, defaulting to /bin/sh.
 func (m *Manager) GetShell() string {
 	if shell := os.Getenv("SHELL"); shell != "" {
 		return shell
@@ -196,10 +196,10 @@ func (m *Manager) GetShell() string {
 	return "/bin/sh"
 }
 
-// DefaultKeybindings はデフォルトのキーバインドを返す
+// DefaultKeybindings returns the default keybindings
 func DefaultKeybindings() KeybindingsConfig {
 	return KeybindingsConfig{
-		// セッション一覧画面
+		// Session list screen
 		Up:            []string{"up", "k"},
 		Down:          []string{"down", "j"},
 		Attach:        []string{"enter"},
@@ -213,18 +213,18 @@ func DefaultKeybindings() KeybindingsConfig {
 		Vscode:        []string{"v"},
 		Notifications: []string{"!"},
 
-		// セッション作成フォーム
+		// Session creation form
 		NextField:      []string{"tab"},
 		PrevField:      []string{"shift+tab"},
 		Submit: []string{"enter"},
 		CancelForm:     []string{"esc"},
 
-		// アタッチ中のキー
+		// Keys while attached
 		Detach: []string{"ctrl+]"},
 	}
 }
 
-// GetKeybindings はキーバインド設定を返す（未設定の項目はデフォルト値を使用）
+// GetKeybindings returns keybinding settings (uses defaults for unset items)
 func (m *Manager) GetKeybindings() KeybindingsConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -232,7 +232,7 @@ func (m *Manager) GetKeybindings() KeybindingsConfig {
 	defaults := DefaultKeybindings()
 	cfg := m.config.Keybindings
 
-	// 未設定の項目はデフォルト値を使用
+	// Use defaults for unset items
 	if len(cfg.Up) == 0 {
 		cfg.Up = defaults.Up
 	}
@@ -284,7 +284,7 @@ func (m *Manager) GetKeybindings() KeybindingsConfig {
 	if len(cfg.Detach) == 0 {
 		cfg.Detach = defaults.Detach
 	} else {
-		// サポート外のキーをフィルタ
+		// Filter out unsupported keys
 		var valid []string
 		for _, k := range cfg.Detach {
 			if err := ValidateDetachKey(k); err != nil {
@@ -303,7 +303,7 @@ func (m *Manager) GetKeybindings() KeybindingsConfig {
 	return cfg
 }
 
-// GetDetachKey はアタッチ中のデタッチキーのバイト値を返す
+// GetDetachKey returns the byte value of the detach key used while attached
 func (m *Manager) GetDetachKey() byte {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -316,7 +316,7 @@ func (m *Manager) GetDetachKey() byte {
 	return parseKeyToByte(detachKeys[0])
 }
 
-// GetDetachKeyHint はデタッチキーの表示用文字列を返す
+// GetDetachKeyHint returns the display string for the detach key
 func (m *Manager) GetDetachKeyHint() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -329,7 +329,7 @@ func (m *Manager) GetDetachKeyHint() string {
 	return formatKeyHint(detachKeys[0])
 }
 
-// GetDetachKeyCSIu はデタッチキーのCSI uシーケンスを返す
+// GetDetachKeyCSIu returns the CSI u sequence for the detach key
 func (m *Manager) GetDetachKeyCSIu() []byte {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -342,7 +342,7 @@ func (m *Manager) GetDetachKeyCSIu() []byte {
 	return parseKeyToCSIu(detachKeys[0])
 }
 
-// parseKeyToByte はキー文字列をバイト値に変換する
+// parseKeyToByte converts a key string to its byte value
 func parseKeyToByte(key string) byte {
 	switch key {
 	case "ctrl+^":
@@ -354,12 +354,12 @@ func parseKeyToByte(key string) byte {
 	case "ctrl+g":
 		return 0x07
 	default:
-		return 0x1d // デフォルト: ctrl+]
+		return 0x1d // default: ctrl+]
 	}
 }
 
-// parseKeyToCSIu はキー文字列をCSI uシーケンスに変換する
-// iTerm2等のCSI uモード対応ターミナル用
+// parseKeyToCSIu converts a key string to its CSI u sequence.
+// For terminals that support CSI u mode (e.g., iTerm2).
 func parseKeyToCSIu(key string) []byte {
 	switch key {
 	case "ctrl+^":
@@ -375,11 +375,11 @@ func parseKeyToCSIu(key string) []byte {
 		// Ctrl+G: keycode=103('g'), modifiers=5(Ctrl)
 		return []byte("\x1b[103;5u")
 	default:
-		return []byte("\x1b[93;5u") // デフォルト: ctrl+]
+		return []byte("\x1b[93;5u") // default: ctrl+]
 	}
 }
 
-// formatKeyHint はキー文字列を表示用にフォーマットする
+// formatKeyHint formats a key string for display
 func formatKeyHint(key string) string {
 	switch key {
 	case "ctrl+^":
@@ -395,7 +395,7 @@ func formatKeyHint(key string) string {
 	}
 }
 
-// formatKeyForTmux はキー文字列をtmuxのbind-key形式に変換する
+// formatKeyForTmux converts a key string to tmux bind-key format
 func formatKeyForTmux(key string) string {
 	switch key {
 	case "ctrl+^":
@@ -411,7 +411,7 @@ func formatKeyForTmux(key string) string {
 	}
 }
 
-// GetDetachKeyTmux はデタッチキーのtmux bind-key形式文字列を返す
+// GetDetachKeyTmux returns the detach key as a tmux bind-key format string
 func (m *Manager) GetDetachKeyTmux() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

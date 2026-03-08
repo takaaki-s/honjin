@@ -3,9 +3,9 @@ package config
 import "errors"
 
 var (
-	// ErrRepositoryExists はリポジトリが既に存在する場合のエラー
+	// ErrRepositoryExists is returned when a repository already exists
 	ErrRepositoryExists = errors.New("repository already exists")
 
-	// ErrRepositoryNotFound はリポジトリが見つからない場合のエラー
+	// ErrRepositoryNotFound is returned when a repository is not found
 	ErrRepositoryNotFound = errors.New("repository not found")
 )

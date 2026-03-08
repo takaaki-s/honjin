@@ -11,14 +11,14 @@ import (
 )
 
 const (
-	// slaveStartTimeout はSlave起動コマンドのタイムアウト
+	// slaveStartTimeout is the timeout for slave startup commands
 	slaveStartTimeout = 30 * time.Second
 
-	// defaultRemoteSocketPath はリモート側のデフォルトdaemonソケットパス
+	// defaultRemoteSocketPath is the default daemon socket path on the remote side
 	defaultRemoteSocketPath = "~/.ccvalet/run/daemon.sock"
 )
 
-// StartSlaveCommand はリモートのSlaveデーモンを起動するコマンドを生成する
+// StartSlaveCommand generates a command to start the slave daemon on a remote host
 func StartSlaveCommand(hostConfig config.HostConfig) *exec.Cmd {
 	socketPath := hostConfig.SocketPath
 	if socketPath == "" {
@@ -29,10 +29,10 @@ func StartSlaveCommand(hostConfig config.HostConfig) *exec.Cmd {
 
 	switch hostConfig.Type {
 	case "ssh":
-		// ユーザーのssh_optsの前にオーバーライドを追加（SSHはfirst match winsルール）
-		// - ControlMaster=no: 既存ControlMasterとの競合を回避
-		// - ClearAllForwardings=yes: ssh_configのLocalForward/RemoteForwardを抑止
-		//   （bootstrapはワンショットコマンド実行のためフォワーディング不要）
+		// Add overrides before user's ssh_opts (SSH uses first-match-wins rule)
+		// - ControlMaster=no: avoid conflicts with existing ControlMaster
+		// - ClearAllForwardings=yes: suppress LocalForward/RemoteForward from ssh_config
+		//   (bootstrap is a one-shot command execution, no forwarding needed)
 		args := make([]string, 0, len(hostConfig.SSHOpts)+6)
 		args = append(args, "-o", "ControlMaster=no", "-o", "ClearAllForwardings=yes")
 		args = append(args, hostConfig.SSHOpts...)
@@ -45,8 +45,8 @@ func StartSlaveCommand(hostConfig config.HostConfig) *exec.Cmd {
 	}
 }
 
-// StartSlave はリモートのSlaveデーモンを起動し、結果を返す
-// ccvaletが未インストールの場合は ErrNotInstalled を返す
+// StartSlave starts the slave daemon on a remote host and returns the result.
+// Returns an error if ccvalet is not installed on the remote host.
 func StartSlave(hostConfig config.HostConfig) error {
 	cmd := StartSlaveCommand(hostConfig)
 	if cmd == nil {
@@ -61,7 +61,7 @@ func StartSlave(hostConfig config.HostConfig) error {
 	if err != nil {
 		outStr := strings.TrimSpace(string(output))
 
-		// ccvaletが未インストールの場合を検出
+		// Detect if ccvalet is not installed
 		if isNotInstalled(outStr, err) {
 			return fmt.Errorf("ccvalet is not installed on host '%s'. Install it first: go install github.com/takaaki-s/claude-code-valet/cmd/ccvalet@latest", hostConfig.ID)
 		}
@@ -76,12 +76,12 @@ func StartSlave(hostConfig config.HostConfig) error {
 	return nil
 }
 
-// isNotInstalled はコマンドの出力からccvaletが未インストールかどうかを判定する
+// isNotInstalled determines from command output whether ccvalet is not installed
 func isNotInstalled(output string, err error) bool {
 	lower := strings.ToLower(output)
-	// "ccvalet: command not found" や "ccvalet: not found" 等のシェルエラーを検出
-	// SSHのインフラエラー（ControlPath等）の "not found" と区別するため、
-	// "ccvalet" を含む行のみをチェックする
+	// Detect shell errors like "ccvalet: command not found" or "ccvalet: not found"
+	// Only check lines containing "ccvalet" to distinguish from SSH infrastructure
+	// errors (ControlPath etc.) that also contain "not found"
 	for _, line := range strings.Split(lower, "\n") {
 		if !strings.Contains(line, "ccvalet") {
 			continue

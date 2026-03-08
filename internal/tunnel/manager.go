@@ -14,36 +14,36 @@ import (
 )
 
 const (
-	// DefaultRemoteSocketPath はリモート側のデフォルトdaemonソケットパス
+	// DefaultRemoteSocketPath is the default daemon socket path on the remote side
 	DefaultRemoteSocketPath = ".ccvalet/run/daemon.sock"
 
-	// localSocketDir はトンネル用ローカルソケットの配置ディレクトリ
+	// localSocketDir is the directory for tunnel local sockets
 	localSocketDir = "/tmp/ccvalet-tunnels"
 )
 
-// Tunnel はリモートホストへのトンネル接続を表す
+// Tunnel represents a tunnel connection to a remote host
 type Tunnel struct {
 	HostID      string
 	HostType    string // "ssh" or "docker"
-	LocalSocket string // ローカル側のソケットパス
+	LocalSocket string // Local socket path
 	process     *os.Process
 	cmd         *exec.Cmd
 }
 
-// Manager はトンネル接続を管理する
+// Manager manages tunnel connections
 type Manager struct {
 	mu      sync.RWMutex
 	tunnels map[string]*Tunnel
 }
 
-// NewManager は新しいトンネルマネージャを作成する
+// NewManager creates a new tunnel manager
 func NewManager() *Manager {
 	return &Manager{
 		tunnels: make(map[string]*Tunnel),
 	}
 }
 
-// Open はホスト設定に基づいてトンネルを開く
+// Open opens a tunnel based on host configuration
 func (m *Manager) Open(hostConfig config.HostConfig) (string, error) {
 	switch hostConfig.Type {
 	case "ssh":
@@ -55,32 +55,32 @@ func (m *Manager) Open(hostConfig config.HostConfig) (string, error) {
 	}
 }
 
-// OpenSSH はSSHトンネルを開いてリモートのdaemonソケットをフォワードする
+// OpenSSH opens an SSH tunnel to forward the remote daemon socket
 // ssh -L {localSocket}:{remoteSocket} -N -f {host}
 func (m *Manager) OpenSSH(hostConfig config.HostConfig) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// 既に接続中なら既存のソケットを返す
+	// Return existing socket if already connected
 	if t, ok := m.tunnels[hostConfig.ID]; ok {
 		if m.isAlive(t) {
 			return t.LocalSocket, nil
 		}
-		// 死んでいたらクリーンアップして再接続
+		// Clean up and reconnect if dead
 		_ = m.closeLocked(hostConfig.ID)
 	}
 
-	// ローカルソケットパスを生成
+	// Generate local socket path
 	localSocket, err := m.prepareLocalSocket(hostConfig.ID)
 	if err != nil {
 		return "", fmt.Errorf("failed to prepare local socket: %w", err)
 	}
 
-	// リモートソケットパスを決定
-	// SSH -Lのリモートパスは絶対パスが必要（相対パスはsshdで正しく解決されない）
+	// Determine remote socket path
+	// SSH -L requires an absolute path for the remote side (relative paths are not resolved correctly by sshd)
 	remoteSocket := hostConfig.SocketPath
 	if remoteSocket == "" {
-		// リモートのホームディレクトリを取得して絶対パスを構築
+		// Get remote home directory to build an absolute path
 		remoteHome, err := m.getRemoteHome(hostConfig)
 		if err != nil {
 			os.Remove(localSocket)
@@ -89,19 +89,19 @@ func (m *Manager) OpenSSH(hostConfig config.HostConfig) (string, error) {
 		remoteSocket = remoteHome + "/" + DefaultRemoteSocketPath
 	}
 
-	// SSHコマンドを構築
-	// ユーザーのssh_optsの前にオーバーライドを追加（SSHはfirst match winsルール）
-	// - ControlMaster=no: トンネル専用の長寿命接続のためControlMasterを使わない
-	// - ExitOnForwardFailure=no: ssh_configのLocalForward/RemoteForwardが
-	//   ポート競合で失敗してもSSHを中断させない（トンネル用-Lは別途waitForSocketで検証）
-	// - -A: SSHエージェント転送を有効化（リモートでgit fetch等に必要）
-	// 注: ClearAllForwardings=yesはコマンドラインの-Lも消すため使えない
+	// Build SSH command
+	// Add overrides before user's ssh_opts (SSH uses first-match-wins rule)
+	// - ControlMaster=no: don't use ControlMaster for long-lived tunnel connections
+	// - ExitOnForwardFailure=no: don't abort SSH if LocalForward/RemoteForward in
+	//   ssh_config fails due to port conflicts (tunnel -L is verified separately via waitForSocket)
+	// - -A: enable SSH agent forwarding (needed for git fetch etc. on remote)
+	// Note: ClearAllForwardings=yes cannot be used as it also clears command-line -L
 	args := make([]string, 0, len(hostConfig.SSHOpts)+10)
 	args = append(args, "-A", "-o", "ControlMaster=no", "-o", "ExitOnForwardFailure=no")
 	args = append(args, hostConfig.SSHOpts...)
-	// リモートでSSHエージェントソケットの安定シンボリックリンクを作成し、
-	// slaveデーモンがgit fetch等で利用できるようにする。
-	// -N（コマンド無し）の代わりに、symlink作成後にsleepで待機する。
+	// Create a stable symlink for the SSH agent socket on the remote,
+	// so the slave daemon can use it for git fetch etc.
+	// Instead of -N (no command), create the symlink then sleep to keep the connection.
 	agentSymlink := "~/.ccvalet/ssh-agent.sock"
 	remoteCmd := fmt.Sprintf(
 		"mkdir -p ~/.ccvalet && test -n \"$SSH_AUTH_SOCK\" && ln -sf \"$SSH_AUTH_SOCK\" %s; "+
@@ -132,7 +132,7 @@ func (m *Manager) OpenSSH(hostConfig config.HostConfig) (string, error) {
 	}
 	m.tunnels[hostConfig.ID] = tunnel
 
-	// ソケットが利用可能になるまで待つ
+	// Wait until the socket becomes available
 	if err := m.waitForSocket(localSocket, 10*time.Second); err != nil {
 		_ = m.closeLocked(hostConfig.ID)
 		return "", fmt.Errorf("SSH tunnel to %s started but socket not available: %w", hostConfig.Host, err)
@@ -141,21 +141,21 @@ func (m *Manager) OpenSSH(hostConfig config.HostConfig) (string, error) {
 	return localSocket, nil
 }
 
-// OpenDocker はDockerコンテナのdaemonソケットへの接続を設定する
-// Dockerの場合、ボリュームマウント経由でソケットを共有する想定
+// OpenDocker sets up a connection to the Docker container's daemon socket.
+// For Docker, the socket is expected to be shared via volume mount.
 func (m *Manager) OpenDocker(hostConfig config.HostConfig) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// 既に設定済みなら既存のソケットを返す
+	// Return existing socket if already configured
 	if t, ok := m.tunnels[hostConfig.ID]; ok {
 		return t.LocalSocket, nil
 	}
 
-	// Dockerの場合、ソケットパスはボリュームマウントで直接アクセス可能な前提
-	// SSHと同じ規約でhost IDからローカルソケットパスを自動計算
-	// 例: docker run -v /tmp/ccvalet-tunnels/docker-dev:/root/.ccvalet/run container
-	//     → /tmp/ccvalet-tunnels/docker-dev/daemon.sock でアクセス
+	// For Docker, the socket path is assumed to be directly accessible via volume mount.
+	// The local socket path is auto-calculated from host ID using the same convention as SSH.
+	// Example: docker run -v /tmp/ccvalet-tunnels/docker-dev:/root/.ccvalet/run container
+	//          -> accessible at /tmp/ccvalet-tunnels/docker-dev/daemon.sock
 	localSocket := filepath.Join(localSocketDir, hostConfig.ID, "daemon.sock")
 	_ = os.MkdirAll(filepath.Dir(localSocket), 0700)
 
@@ -163,7 +163,7 @@ func (m *Manager) OpenDocker(hostConfig config.HostConfig) (string, error) {
 		HostID:      hostConfig.ID,
 		HostType:    "docker",
 		LocalSocket: localSocket,
-		process:     nil, // Dockerではプロセス管理不要
+		process:     nil, // No process management needed for Docker
 		cmd:         nil,
 	}
 	m.tunnels[hostConfig.ID] = tunnel
@@ -171,14 +171,14 @@ func (m *Manager) OpenDocker(hostConfig config.HostConfig) (string, error) {
 	return localSocket, nil
 }
 
-// Close は指定したホストのトンネルを閉じる
+// Close closes the tunnel for the specified host
 func (m *Manager) Close(hostID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.closeLocked(hostID)
 }
 
-// CloseAll は全てのトンネルを閉じる
+// CloseAll closes all tunnels
 func (m *Manager) CloseAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -188,7 +188,7 @@ func (m *Manager) CloseAll() {
 	}
 }
 
-// LocalSocket はホストIDに対応するローカルソケットパスを返す
+// LocalSocket returns the local socket path for the given host ID
 func (m *Manager) LocalSocket(hostID string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -199,7 +199,7 @@ func (m *Manager) LocalSocket(hostID string) string {
 	return ""
 }
 
-// IsAlive はトンネルが生存しているかを返す
+// IsAlive returns whether the tunnel is alive
 func (m *Manager) IsAlive(hostID string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -211,14 +211,14 @@ func (m *Manager) IsAlive(hostID string) bool {
 	return m.isAlive(t)
 }
 
-// closeLocked はロック取得済みの状態でトンネルを閉じる
+// closeLocked closes the tunnel (caller must hold the lock)
 func (m *Manager) closeLocked(hostID string) error {
 	t, ok := m.tunnels[hostID]
 	if !ok {
 		return nil
 	}
 
-	// SSHプロセスを終了
+	// Terminate SSH process
 	if t.process != nil {
 		_ = t.process.Kill()
 		if t.cmd != nil {
@@ -226,7 +226,7 @@ func (m *Manager) closeLocked(hostID string) error {
 		}
 	}
 
-	// ローカルソケットファイルを削除
+	// Remove local socket file
 	if t.HostType == "ssh" {
 		os.Remove(t.LocalSocket)
 	}
@@ -235,24 +235,24 @@ func (m *Manager) closeLocked(hostID string) error {
 	return nil
 }
 
-// isAlive はトンネルが生存しているかを確認する
+// isAlive checks whether the tunnel is alive
 func (m *Manager) isAlive(t *Tunnel) bool {
 	if t.HostType == "docker" {
-		// Dockerの場合、ソケットファイルの存在確認
+		// For Docker, check socket file existence
 		_, err := os.Stat(t.LocalSocket)
 		return err == nil
 	}
 
-	// SSHの場合、プロセスの生存確認
+	// For SSH, check process liveness
 	if t.process == nil {
 		return false
 	}
-	// Unixではプロセスにシグナル0を送って生存確認
+	// On Unix, send signal 0 to check process liveness
 	err := t.process.Signal(os.Signal(nil))
 	return err == nil
 }
 
-// prepareLocalSocket はローカルソケットのパスを準備する
+// prepareLocalSocket prepares the local socket path
 func (m *Manager) prepareLocalSocket(hostID string) (string, error) {
 	dir := filepath.Join(localSocketDir, hostID)
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -261,13 +261,13 @@ func (m *Manager) prepareLocalSocket(hostID string) (string, error) {
 
 	socketPath := filepath.Join(dir, "daemon.sock")
 
-	// 既存のソケットファイルがあれば削除
+	// Remove existing socket file if present
 	os.Remove(socketPath)
 
 	return socketPath, nil
 }
 
-// waitForSocket はソケットが利用可能になるまで待つ
+// waitForSocket waits until the socket becomes available
 func (m *Manager) waitForSocket(socketPath string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 
@@ -283,7 +283,7 @@ func (m *Manager) waitForSocket(socketPath string, timeout time.Duration) error 
 	return fmt.Errorf("timeout waiting for socket %s", socketPath)
 }
 
-// getRemoteHome はSSH経由でリモートのホームディレクトリを取得する
+// getRemoteHome gets the remote home directory via SSH
 func (m *Manager) getRemoteHome(hostConfig config.HostConfig) (string, error) {
 	args := []string{"-o", "ControlMaster=no", "-o", "ClearAllForwardings=yes"}
 	args = append(args, hostConfig.SSHOpts...)

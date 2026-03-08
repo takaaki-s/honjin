@@ -15,13 +15,13 @@ import (
 	"github.com/takaaki-s/claude-code-valet/internal/tmux"
 )
 
-// formStep は現在のフォームステップを表す
+// formStep represents the current form step
 type formStep int
 
 const (
-	stepHost    formStep = iota // ホスト選択（複数ホスト時のみ）
-	stepWorkDir                 // ワークディレクトリ選択
-	stepName                    // セッション名
+	stepHost    formStep = iota // Host selection (only with multiple hosts)
+	stepWorkDir                 // Work directory selection
+	stepName                    // Session name
 )
 
 // CreateFormModel is a standalone Bubble Tea model for the session creation form.
@@ -143,7 +143,7 @@ func (m CreateFormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// Processing中はキー入力を無視
+		// Ignore key input while processing
 		if m.processingMsg != "" {
 			return m, nil
 		}
@@ -152,7 +152,7 @@ func (m CreateFormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return m, tea.Quit
 		case "esc":
-			// Escの挙動をステップに応じて変える
+			// Change Esc behavior based on current step
 			switch m.step {
 			case stepWorkDir:
 				if m.hasMultipleHosts() {
@@ -176,7 +176,7 @@ func (m CreateFormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.processingMsg = ""
 			m.err = msg.err
-			// エラー時はnameステップに戻る
+			// Return to name step on error
 			m.step = stepName
 			m.nameInput.Focus()
 			return m, nil
@@ -188,7 +188,7 @@ func (m CreateFormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case DirHistoryRemoveMsg:
-		// ディレクトリが存在しないため永続履歴から削除
+		// Remove from persistent history since directory does not exist
 		_ = m.client.RemoveDirHistory(msg.HostID, msg.Path)
 		return m, nil
 	}
@@ -274,7 +274,7 @@ func (m CreateFormModel) updateHostStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.hostInput.Blur()
 			m.hostDropdownOpen = false
 
-			// ホスト変更時に履歴を再取得
+			// Re-fetch history when host changes
 			hostID := m.selectedHostID
 			if hostID == "" {
 				hostID = "local"
@@ -283,7 +283,7 @@ func (m CreateFormModel) updateHostStep(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.dirPicker.SetHistory(convertDirHistoryEntries(entries, hostID))
 			}
 
-			// リモートホスト選択時、ディレクトリピッカーをリモートモードに切り替え
+			// Switch directory picker to remote mode when remote host is selected
 			if m.selectedHostID != "" && m.selectedHostID != "local" && m.configMgr != nil {
 				if hc := m.configMgr.GetHost(m.selectedHostID); hc != nil {
 					cmd := m.dirPicker.SetRemoteHost(hc)
@@ -487,11 +487,11 @@ func convertDirHistoryEntries(entries []config.DirHistoryEntry, hostID string) [
 	result := make([]HistoryEntry, 0, len(entries))
 	for _, e := range entries {
 		displayPath := e.Path
-		// ローカルの場合: homeプレフィックスを ~ に変換
+		// Local: convert home prefix to ~
 		if hostID == "local" && home != "" && strings.HasPrefix(displayPath, home) {
 			displayPath = "~" + displayPath[len(home):]
 		}
-		// リモートの場合: Path は既に ~/... 形式で保存されているのでそのまま使う
+		// Remote: Path is already stored in ~/... format, use as-is
 		result = append(result, HistoryEntry{
 			Path:        e.Path,
 			DisplayPath: displayPath,

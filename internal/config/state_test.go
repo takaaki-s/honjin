@@ -124,16 +124,16 @@ func TestStateManager_RecordDirUsage_MaxLimit(t *testing.T) {
 		t.Fatalf("NewStateManager: %v", err)
 	}
 
-	// 25件追加 → 20件に切り詰められるはず
+	// Add 25 entries → should be trimmed to 20
 	for i := 0; i < 25; i++ {
 		path := filepath.Join("/home/user", string(rune('a'+i)))
 		if err := sm.RecordDirUsage("local", path); err != nil {
 			t.Fatalf("RecordDirUsage(%d): %v", i, err)
 		}
-		time.Sleep(time.Millisecond) // LastUsedAtの順序保証
+		time.Sleep(time.Millisecond) // Ensure LastUsedAt ordering
 	}
 
-	// 全hostで取得
+	// Get total across all hosts
 	sm.mu.RLock()
 	total := len(sm.state.DirHistory)
 	sm.mu.RUnlock()
@@ -185,7 +185,7 @@ func TestStateManager_GetDirHistory_MaxEntries(t *testing.T) {
 		t.Fatalf("got %d entries, want 5", len(entries))
 	}
 
-	// 最新が先頭
+	// Most recent first
 	if entries[0].LastUsedAt.Before(entries[4].LastUsedAt) {
 		t.Error("entries not sorted by LastUsedAt descending")
 	}
@@ -224,7 +224,7 @@ func TestStateManager_RemoveDirHistory_NonExistent(t *testing.T) {
 		t.Fatalf("NewStateManager: %v", err)
 	}
 
-	// 存在しないエントリの削除はエラーにならない
+	// Removing a non-existent entry should not return an error
 	if err := sm.RemoveDirHistory("local", "/no/such/path"); err != nil {
 		t.Fatalf("RemoveDirHistory(non-existent): %v", err)
 	}
@@ -239,7 +239,7 @@ func TestStateManager_DirHistory_Persistence(t *testing.T) {
 
 	_ = sm.RecordDirUsage("local", "/home/user/project")
 
-	// 再読み込み
+	// Reload
 	sm2, err := NewStateManager(dir)
 	if err != nil {
 		t.Fatalf("NewStateManager (reload): %v", err)

@@ -109,7 +109,7 @@ func init() {
 	daemonCmd.AddCommand(daemonStatusCmd)
 	daemonCmd.AddCommand(daemonStopCmd)
 
-	// --socket フラグ: Slaveモードでカスタムソケットパスを指定
+	// --socket flag: specify custom socket path for slave mode
 	daemonCmd.PersistentFlags().StringVar(&socketPathFlag, "socket", "", "custom socket path (for slave mode)")
 }
 

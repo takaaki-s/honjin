@@ -15,7 +15,7 @@ import (
 // Client is the daemon client
 type Client struct {
 	socketPath string
-	hostID     string // ホスト識別子 ("local", "ec2", "docker-dev" 等)
+	hostID     string // Host identifier ("local", "ec2", "docker-dev", etc.)
 }
 
 // NewClient creates a new daemon client
@@ -199,7 +199,7 @@ func (c *Client) SendHook(req HookRequest) error {
 	return nil
 }
 
-// NotificationHistory は通知履歴を取得する
+// NotificationHistory retrieves the notification history
 func (c *Client) NotificationHistory() ([]notify.Entry, error) {
 	resp, err := c.send(Request{Action: "notification-history"})
 	if err != nil {
@@ -216,7 +216,7 @@ func (c *Client) NotificationHistory() ([]notify.Entry, error) {
 	return entries, nil
 }
 
-// NotificationHistoryWithHostID は通知履歴を取得し、各エントリにHostIDをタグ付けする
+// NotificationHistoryWithHostID retrieves notification history and tags each entry with HostID
 func (c *Client) NotificationHistoryWithHostID() ([]notify.Entry, error) {
 	entries, err := c.NotificationHistory()
 	if err != nil {
@@ -228,7 +228,7 @@ func (c *Client) NotificationHistoryWithHostID() ([]notify.Entry, error) {
 	return entries, nil
 }
 
-// DirHistory はディレクトリ使用履歴を取得する
+// DirHistory retrieves directory usage history
 func (c *Client) DirHistory(hostID string, maxEntries int) ([]config.DirHistoryEntry, error) {
 	data, _ := json.Marshal(struct {
 		HostID     string `json:"host_id"`
@@ -250,7 +250,7 @@ func (c *Client) DirHistory(hostID string, maxEntries int) ([]config.DirHistoryE
 	return entries, nil
 }
 
-// RemoveDirHistory はディレクトリ履歴エントリを削除する
+// RemoveDirHistory removes a directory history entry
 func (c *Client) RemoveDirHistory(hostID, path string) error {
 	data, _ := json.Marshal(struct {
 		HostID string `json:"host_id"`
@@ -267,7 +267,7 @@ func (c *Client) RemoveDirHistory(hostID, path string) error {
 	return nil
 }
 
-// ListHosts はホスト一覧を取得する
+// ListHosts retrieves the list of hosts
 func (c *Client) ListHosts() ([]HostInfo, error) {
 	resp, err := c.send(Request{Action: "list-hosts"})
 	if err != nil {
