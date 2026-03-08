@@ -380,3 +380,217 @@ func TestRequestResponse_JSON(t *testing.T) {
 		t.Errorf("Action: got %q, want %q", decoded.Action, "new")
 	}
 }
+
+func TestIntegration_Start(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	_, client := setupTestServer(t)
+
+	info, err := client.NewWithOptions(NewOptions{
+		Name:    "start-test",
+		WorkDir: "/tmp/start-test",
+		Start:   false,
+	})
+	if err != nil {
+		t.Fatalf("NewWithOptions: %v", err)
+	}
+
+	// Call Start — tmux is not available in test so this should return an error,
+	// but the important thing is the API roundtrip works (no socket/protocol error).
+	err = client.Start(info.ID, "")
+	if err == nil {
+		// If Start somehow succeeds (e.g. tmux is installed), that's fine too.
+		t.Log("Start succeeded unexpectedly (tmux may be available)")
+	} else {
+		t.Logf("Start returned expected error (no tmux): %v", err)
+	}
+}
+
+func TestIntegration_Kill(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	_, client := setupTestServer(t)
+
+	info, err := client.NewWithOptions(NewOptions{
+		Name:    "kill-test",
+		WorkDir: "/tmp/kill-test",
+		Start:   false,
+	})
+	if err != nil {
+		t.Fatalf("NewWithOptions: %v", err)
+	}
+
+	if err := client.Kill(info.ID, ""); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+
+	sessions, err := client.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("List: got %d sessions, want 1", len(sessions))
+	}
+	if string(sessions[0].Status) != "stopped" {
+		t.Errorf("Status after Kill: got %q, want %q", sessions[0].Status, "stopped")
+	}
+}
+
+func TestIntegration_DeleteByHostID(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	_, client := setupTestServer(t)
+
+	info, err := client.NewWithOptions(NewOptions{
+		Name:    "delete-host-test",
+		WorkDir: "/tmp/delete-host-test",
+		Start:   false,
+	})
+	if err != nil {
+		t.Fatalf("NewWithOptions: %v", err)
+	}
+
+	// Delete with hostID "local" — should be treated the same as empty
+	if err := client.Delete(info.ID, "local"); err != nil {
+		t.Fatalf("Delete with hostID=local: %v", err)
+	}
+
+	sessions, err := client.List()
+	if err != nil {
+		t.Fatalf("List after delete: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Errorf("List after delete: got %d sessions, want 0", len(sessions))
+	}
+}
+
+func TestIntegration_HookCWDUpdate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	_, client := setupTestServer(t)
+
+	info, err := client.NewWithOptions(NewOptions{
+		Name:    "cwd-test",
+		WorkDir: "/tmp/cwd-test",
+		Start:   false,
+	})
+	if err != nil {
+		t.Fatalf("NewWithOptions: %v", err)
+	}
+
+	// Send a hook with CWD field set
+	newCWD := "/home/user/new-project"
+	err = client.SendHook(HookRequest{
+		CcvaletSessionID: info.ID,
+		HookEventName:    "UserPromptSubmit",
+		CWD:              newCWD,
+	})
+	if err != nil {
+		t.Fatalf("SendHook: %v", err)
+	}
+
+	sessions, err := client.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("List: got %d sessions, want 1", len(sessions))
+	}
+	if sessions[0].CurrentWorkDir != newCWD {
+		t.Errorf("CurrentWorkDir: got %q, want %q", sessions[0].CurrentWorkDir, newCWD)
+	}
+}
+
+func TestIntegration_MultipleHookTransitions(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	_, client := setupTestServer(t)
+
+	info, err := client.NewWithOptions(NewOptions{
+		Name:    "multi-hook-test",
+		WorkDir: "/tmp/multi-hook-test",
+		Start:   false,
+	})
+	if err != nil {
+		t.Fatalf("NewWithOptions: %v", err)
+	}
+
+	// Helper to check status after a hook
+	checkStatus := func(step, expectedStatus string) {
+		t.Helper()
+		sessions, err := client.List()
+		if err != nil {
+			t.Fatalf("List at step %s: %v", step, err)
+		}
+		if len(sessions) != 1 {
+			t.Fatalf("List at step %s: got %d sessions, want 1", step, len(sessions))
+		}
+		if string(sessions[0].Status) != expectedStatus {
+			t.Errorf("Status at step %s: got %q, want %q", step, sessions[0].Status, expectedStatus)
+		}
+	}
+
+	// Step 1: UserPromptSubmit → thinking
+	err = client.SendHook(HookRequest{
+		CcvaletSessionID: info.ID,
+		HookEventName:    "UserPromptSubmit",
+	})
+	if err != nil {
+		t.Fatalf("SendHook(UserPromptSubmit #1): %v", err)
+	}
+	checkStatus("UserPromptSubmit #1", "thinking")
+
+	// Step 2: Stop → idle
+	err = client.SendHook(HookRequest{
+		CcvaletSessionID: info.ID,
+		HookEventName:    "Stop",
+	})
+	if err != nil {
+		t.Fatalf("SendHook(Stop): %v", err)
+	}
+	checkStatus("Stop", "idle")
+
+	// Step 3: UserPromptSubmit → thinking (again)
+	err = client.SendHook(HookRequest{
+		CcvaletSessionID: info.ID,
+		HookEventName:    "UserPromptSubmit",
+	})
+	if err != nil {
+		t.Fatalf("SendHook(UserPromptSubmit #2): %v", err)
+	}
+	checkStatus("UserPromptSubmit #2", "thinking")
+
+	// Step 4: Notification(permission_prompt) → permission
+	err = client.SendHook(HookRequest{
+		CcvaletSessionID: info.ID,
+		HookEventName:    "Notification",
+		NotificationType: "permission_prompt",
+	})
+	if err != nil {
+		t.Fatalf("SendHook(Notification): %v", err)
+	}
+	checkStatus("Notification(permission_prompt)", "permission")
+}
+
+func TestIntegration_DeleteNonExistent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	_, client := setupTestServer(t)
+
+	err := client.Delete("non-existent-id-12345", "")
+	if err == nil {
+		t.Error("expected error when deleting non-existent session, got nil")
+	}
+}

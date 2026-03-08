@@ -530,3 +530,158 @@ func TestManager_RecoverTmuxSessions_NoTmux(t *testing.T) {
 		t.Errorf("Status = %q, want %q", got.Status, StatusStopped)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// FindByClaudeSessionID tests
+// ---------------------------------------------------------------------------
+
+func TestManager_FindByClaudeSessionID(t *testing.T) {
+	mgr, _ := newTestManager(t)
+
+	sess, err := mgr.CreateWithOptions(CreateOptions{WorkDir: "/tmp/find-cc", Name: "findcc"})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Find by the ClaudeSessionID that was auto-generated during creation.
+	got, ok := mgr.FindByClaudeSessionID(sess.ClaudeSessionID)
+	if !ok {
+		t.Fatal("FindByClaudeSessionID returned ok=false for existing session")
+	}
+	if got.ID != sess.ID {
+		t.Errorf("ID = %q, want %q", got.ID, sess.ID)
+	}
+
+	// Find with a non-existent ClaudeSessionID should return nil.
+	got2, ok2 := mgr.FindByClaudeSessionID("nonexistent-cc-id")
+	if ok2 {
+		t.Fatal("FindByClaudeSessionID returned ok=true for non-existent ClaudeSessionID")
+	}
+	if got2 != nil {
+		t.Errorf("expected nil session, got %+v", got2)
+	}
+}
+
+func TestManager_FindByClaudeSessionID_NotFound(t *testing.T) {
+	mgr, _ := newTestManager(t)
+
+	// Empty manager: should return nil, false.
+	got, ok := mgr.FindByClaudeSessionID("does-not-exist")
+	if ok {
+		t.Fatal("FindByClaudeSessionID returned ok=true on empty manager")
+	}
+	if got != nil {
+		t.Errorf("expected nil session, got %+v", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// StartBackground tests
+// ---------------------------------------------------------------------------
+
+func TestManager_StartBackground(t *testing.T) {
+	mgr, mock := newTestManager(t)
+
+	// Use a real temp directory so os.Stat in startSessionTmux passes.
+	workDir := t.TempDir()
+
+	sess, err := mgr.CreateWithOptions(CreateOptions{WorkDir: workDir, Name: "bg"})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Configure mock so GetPaneID returns a valid pane ID for the inner session.
+	innerName := "sess-" + sess.ID
+	mock.paneIDs[innerName] = "%99"
+
+	if err := mgr.StartBackground(sess.ID); err != nil {
+		t.Fatalf("StartBackground failed: %v", err)
+	}
+
+	got, ok := mgr.Get(sess.ID)
+	if !ok {
+		t.Fatal("Get returned ok=false after StartBackground")
+	}
+	if got.Status != StatusRunning {
+		t.Errorf("Status = %q, want %q", got.Status, StatusRunning)
+	}
+	if got.TmuxWindowName != innerName {
+		t.Errorf("TmuxWindowName = %q, want %q", got.TmuxWindowName, innerName)
+	}
+
+	// Verify mock tmux calls.
+	if !mock.hasCalledWith("NewSessionWithCmdInDir", innerName) {
+		t.Error("expected NewSessionWithCmdInDir to be called with inner session name")
+	}
+}
+
+func TestManager_StartBackground_NotFound(t *testing.T) {
+	mgr, _ := newTestManager(t)
+
+	err := mgr.StartBackground("nonexistent-id")
+	if err == nil {
+		t.Fatal("expected error for non-existent session ID, got nil")
+	}
+}
+
+func TestManager_StartBackground_AlreadyRunning(t *testing.T) {
+	mgr, mock := newTestManager(t)
+
+	workDir := t.TempDir()
+	sess, err := mgr.CreateWithOptions(CreateOptions{WorkDir: workDir, Name: "already"})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Simulate a session that's already running (has TmuxWindowName and non-stopped status).
+	mgr.mu.Lock()
+	sess.TmuxWindowName = "sess-" + sess.ID
+	sess.Status = StatusRunning
+	mgr.mu.Unlock()
+
+	// StartBackground should succeed without creating a new tmux session.
+	if err := mgr.StartBackground(sess.ID); err != nil {
+		t.Fatalf("StartBackground failed: %v", err)
+	}
+
+	// NewSessionWithCmdInDir should NOT have been called.
+	if mock.hasCalledWith("NewSessionWithCmdInDir", "sess-"+sess.ID) {
+		t.Error("expected NewSessionWithCmdInDir NOT to be called for already running session")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SetStatus extended tests
+// ---------------------------------------------------------------------------
+
+func TestManager_SetStatus_NonExistent(t *testing.T) {
+	mgr, _ := newTestManager(t)
+
+	// Setting status on a non-existent session should not panic.
+	mgr.SetStatus("nonexistent-id", StatusThinking)
+
+	// Verify no sessions were created.
+	infos := mgr.List()
+	if len(infos) != 0 {
+		t.Errorf("List returned %d items, want 0", len(infos))
+	}
+}
+
+func TestManager_SetStatus_Persisted(t *testing.T) {
+	mgr, _ := newTestManager(t)
+
+	sess, err := mgr.CreateWithOptions(CreateOptions{WorkDir: "/tmp/setstatus-persist", Name: "sp"})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	mgr.SetStatus(sess.ID, StatusThinking)
+
+	got, ok := mgr.Get(sess.ID)
+	if !ok {
+		t.Fatal("Get returned ok=false")
+	}
+	if got.Status != StatusThinking {
+		t.Errorf("Status = %q, want %q", got.Status, StatusThinking)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/takaaki-s/claude-code-valet/internal/session"
 )
 
@@ -430,4 +431,678 @@ func TestTruncateStringFromEndKeepsEnd(t *testing.T) {
 	if !strings.HasPrefix(got, "...") {
 		t.Errorf("truncateStringFromEnd should start with '...', got %q", got)
 	}
+}
+
+// --- truncateToWidth ---
+
+func TestTruncateToWidth(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		maxWidth int
+		want     string
+	}{
+		{
+			name:     "ASCII within limit",
+			input:    "hello",
+			maxWidth: 10,
+			want:     "hello",
+		},
+		{
+			name:     "ASCII exact width",
+			input:    "hello",
+			maxWidth: 5,
+			want:     "hello",
+		},
+		{
+			name:     "ASCII truncated",
+			input:    "hello world",
+			maxWidth: 5,
+			want:     "hello",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			maxWidth: 10,
+			want:     "",
+		},
+		{
+			name:     "CJK characters fit",
+			input:    "\u3042\u3044\u3046",
+			maxWidth: 6,
+			want:     "\u3042\u3044\u3046",
+		},
+		{
+			name:     "CJK truncated at boundary",
+			input:    "\u3042\u3044\u3046",
+			maxWidth: 5,
+			// Each CJK char is 2 cells wide; 2 chars = 4 cells fits, 3 chars = 6 cells > 5
+			want:     "\u3042\u3044",
+		},
+		{
+			name:     "mixed ASCII and CJK",
+			input:    "Aあ",
+			maxWidth: 3,
+			// 'A'=1 + 'あ'=2 = 3, fits exactly
+			want:     "Aあ",
+		},
+		{
+			name:     "mixed ASCII and CJK truncated",
+			input:    "Aあい",
+			maxWidth: 3,
+			// 'A'=1 + 'あ'=2 = 3, 'い' would be 5 > 3
+			want:     "Aあ",
+		},
+		{
+			name:     "CJK does not fit partial",
+			input:    "あ",
+			maxWidth: 1,
+			// 'あ' is 2 cells wide, does not fit in 1
+			want:     "",
+		},
+		{
+			name:     "zero width",
+			input:    "hello",
+			maxWidth: 0,
+			want:     "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateToWidth(tt.input, tt.maxWidth)
+			if got != tt.want {
+				t.Errorf("truncateToWidth(%q, %d) = %q, want %q", tt.input, tt.maxWidth, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- truncateFromEndToWidth ---
+
+func TestTruncateFromEndToWidth(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		maxWidth int
+		want     string
+	}{
+		{
+			name:     "ASCII within limit",
+			input:    "hello",
+			maxWidth: 10,
+			want:     "hello",
+		},
+		{
+			name:     "ASCII exact width",
+			input:    "hello",
+			maxWidth: 5,
+			want:     "hello",
+		},
+		{
+			name:     "ASCII truncated keeps end",
+			input:    "hello world",
+			maxWidth: 5,
+			want:     "world",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			maxWidth: 10,
+			want:     "",
+		},
+		{
+			name:     "CJK characters fit",
+			input:    "あい",
+			maxWidth: 4,
+			want:     "あい",
+		},
+		{
+			name:     "CJK truncated keeps end",
+			input:    "あいう",
+			maxWidth: 4,
+			// Each CJK char is 2 cells; from end: 'う'=2, 'い'=2+2=4 fits, 'あ'=4+2=6 > 4
+			want:     "いう",
+		},
+		{
+			name:     "CJK does not fit partial",
+			input:    "あ",
+			maxWidth: 1,
+			// 'あ' is 2 cells wide, does not fit in 1
+			want:     "",
+		},
+		{
+			name:     "mixed ASCII and CJK keeps end",
+			input:    "あtest",
+			maxWidth: 4,
+			// from end: 't'=1, 's'=2, 'e'=3, 't'=4 => "test"
+			want:     "test",
+		},
+		{
+			name:     "zero width",
+			input:    "hello",
+			maxWidth: 0,
+			want:     "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateFromEndToWidth(tt.input, tt.maxWidth)
+			if got != tt.want {
+				t.Errorf("truncateFromEndToWidth(%q, %d) = %q, want %q", tt.input, tt.maxWidth, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- buildStatusSummary ---
+
+func TestBuildStatusSummary(t *testing.T) {
+	t.Run("empty sessions returns empty string", func(t *testing.T) {
+		got := buildStatusSummary(nil)
+		if got != "" {
+			t.Errorf("buildStatusSummary(nil) = %q, want empty string", got)
+		}
+	})
+
+	t.Run("all same status", func(t *testing.T) {
+		sessions := []session.Info{
+			{Status: session.StatusIdle},
+			{Status: session.StatusIdle},
+			{Status: session.StatusIdle},
+		}
+		got := buildStatusSummary(sessions)
+		if got == "" {
+			t.Fatal("buildStatusSummary with idle sessions should not return empty string")
+		}
+		if !strings.Contains(got, "3") {
+			t.Errorf("buildStatusSummary should contain count 3, got %q", got)
+		}
+		if !strings.Contains(got, "Idle") {
+			t.Errorf("buildStatusSummary should contain 'Idle', got %q", got)
+		}
+	})
+
+	t.Run("mixed statuses", func(t *testing.T) {
+		sessions := []session.Info{
+			{Status: session.StatusThinking},
+			{Status: session.StatusThinking},
+			{Status: session.StatusPermission},
+			{Status: session.StatusIdle},
+		}
+		got := buildStatusSummary(sessions)
+		if got == "" {
+			t.Fatal("buildStatusSummary with mixed sessions should not return empty string")
+		}
+		if !strings.Contains(got, "2") {
+			t.Errorf("buildStatusSummary should contain count 2 for thinking, got %q", got)
+		}
+		if !strings.Contains(got, "Thinking") {
+			t.Errorf("buildStatusSummary should contain 'Thinking', got %q", got)
+		}
+		if !strings.Contains(got, "Permission") {
+			t.Errorf("buildStatusSummary should contain 'Permission', got %q", got)
+		}
+		if !strings.Contains(got, "Idle") {
+			t.Errorf("buildStatusSummary should contain 'Idle', got %q", got)
+		}
+	})
+
+	t.Run("stopped only returns empty because stopped is excluded from summary", func(t *testing.T) {
+		sessions := []session.Info{
+			{Status: session.StatusStopped},
+			{Status: session.StatusStopped},
+		}
+		got := buildStatusSummary(sessions)
+		// buildStatusSummary intentionally excludes stopped from the summary
+		if got != "" {
+			t.Errorf("buildStatusSummary with only stopped should return empty, got %q", got)
+		}
+	})
+
+	t.Run("running and creating", func(t *testing.T) {
+		sessions := []session.Info{
+			{Status: session.StatusRunning},
+			{Status: session.StatusCreating},
+			{Status: session.StatusCreating},
+		}
+		got := buildStatusSummary(sessions)
+		if !strings.Contains(got, "Running") {
+			t.Errorf("buildStatusSummary should contain 'Running', got %q", got)
+		}
+		if !strings.Contains(got, "Creating") {
+			t.Errorf("buildStatusSummary should contain 'Creating', got %q", got)
+		}
+	})
+}
+
+// --- getItemsPerPage ---
+
+func TestGetItemsPerPage(t *testing.T) {
+	tests := []struct {
+		name      string
+		height    int
+		searching bool
+		wantMin   int // items should be at least this
+	}{
+		{
+			name:   "tall terminal",
+			height: 40,
+			// availableLines = 40 - 8 = 32, items = 32/4 = 8
+		},
+		{
+			name:   "short terminal",
+			height: 10,
+			// availableLines = 10 - 8 = 2, clamped to 4, items = 4/4 = 1
+		},
+		{
+			name:      "with search bar",
+			height:    40,
+			searching: true,
+			// availableLines = 40 - 8 - 1 = 31, items = 31/4 = 7
+		},
+		{
+			name:   "very short terminal",
+			height: 5,
+			// availableLines = 5 - 8 = -3, clamped to 4, items = 4/4 = 1
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := Model{
+				height:    tt.height,
+				searching: tt.searching,
+			}
+			got := m.getItemsPerPage()
+			if got < 1 {
+				t.Errorf("getItemsPerPage() = %d, should be at least 1", got)
+			}
+			// Verify calculation
+			availableLines := tt.height - 8
+			if tt.searching {
+				availableLines--
+			}
+			if availableLines < 4 {
+				availableLines = 4
+			}
+			expected := availableLines / 4
+			if expected < 1 {
+				expected = 1
+			}
+			if got != expected {
+				t.Errorf("getItemsPerPage() = %d, want %d (height=%d, searching=%v)",
+					got, expected, tt.height, tt.searching)
+			}
+		})
+	}
+}
+
+// --- getTotalPages ---
+
+func TestGetTotalPages(t *testing.T) {
+	tests := []struct {
+		name         string
+		numSessions  int
+		height       int
+		wantPages    int
+	}{
+		{
+			name:        "no sessions",
+			numSessions: 0,
+			height:      40,
+			wantPages:   1,
+		},
+		{
+			name:        "fewer sessions than page size",
+			numSessions: 3,
+			height:      40,
+			// itemsPerPage = (40-8)/4 = 8, totalPages = ceil(3/8) = 1
+			wantPages: 1,
+		},
+		{
+			name:        "exactly one page",
+			numSessions: 8,
+			height:      40,
+			// itemsPerPage = 8, totalPages = ceil(8/8) = 1
+			wantPages: 1,
+		},
+		{
+			name:        "two pages",
+			numSessions: 9,
+			height:      40,
+			// itemsPerPage = 8, totalPages = ceil(9/8) = 2
+			wantPages: 2,
+		},
+		{
+			name:        "many sessions short terminal",
+			numSessions: 10,
+			height:      12,
+			// itemsPerPage = max((12-8),4)/4 = 4/4 = 1, totalPages = ceil(10/1) = 10
+			wantPages: 10,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sessions := make([]session.Info, tt.numSessions)
+			for i := range sessions {
+				sessions[i] = session.Info{ID: string(rune('a' + i)), Name: "s"}
+			}
+			m := Model{
+				sessions: sessions,
+				height:   tt.height,
+			}
+			got := m.getTotalPages()
+			if got != tt.wantPages {
+				t.Errorf("getTotalPages() = %d, want %d", got, tt.wantPages)
+			}
+		})
+	}
+}
+
+// --- getPageSessions ---
+
+func TestGetPageSessions(t *testing.T) {
+	// Create 10 sessions named s0..s9
+	sessions := make([]session.Info, 10)
+	for i := range sessions {
+		sessions[i] = session.Info{ID: string(rune('0' + i)), Name: "s" + string(rune('0'+i))}
+	}
+
+	t.Run("first page", func(t *testing.T) {
+		m := Model{
+			sessions:    sessions,
+			height:      40, // itemsPerPage = (40-8)/4 = 8
+			currentPage: 0,
+		}
+		got := m.getPageSessions()
+		if len(got) != 8 {
+			t.Fatalf("getPageSessions() page 0 len = %d, want 8", len(got))
+		}
+		if got[0].Name != "s0" {
+			t.Errorf("first item Name = %q, want %q", got[0].Name, "s0")
+		}
+		if got[7].Name != "s7" {
+			t.Errorf("last item Name = %q, want %q", got[7].Name, "s7")
+		}
+	})
+
+	t.Run("second page", func(t *testing.T) {
+		m := Model{
+			sessions:    sessions,
+			height:      40,
+			currentPage: 1,
+		}
+		got := m.getPageSessions()
+		if len(got) != 2 {
+			t.Fatalf("getPageSessions() page 1 len = %d, want 2", len(got))
+		}
+		if got[0].Name != "s8" {
+			t.Errorf("first item Name = %q, want %q", got[0].Name, "s8")
+		}
+		if got[1].Name != "s9" {
+			t.Errorf("second item Name = %q, want %q", got[1].Name, "s9")
+		}
+	})
+
+	t.Run("page beyond range resets to page 0", func(t *testing.T) {
+		m := Model{
+			sessions:    sessions,
+			height:      40,
+			currentPage: 99,
+		}
+		got := m.getPageSessions()
+		if len(got) != 8 {
+			t.Fatalf("getPageSessions() beyond range len = %d, want 8", len(got))
+		}
+		if got[0].Name != "s0" {
+			t.Errorf("first item Name = %q, want %q", got[0].Name, "s0")
+		}
+	})
+
+	t.Run("empty sessions", func(t *testing.T) {
+		m := Model{
+			sessions:    nil,
+			height:      40,
+			currentPage: 0,
+		}
+		got := m.getPageSessions()
+		if got != nil {
+			t.Errorf("getPageSessions() with no sessions should return nil, got %v", got)
+		}
+	})
+}
+
+// --- applySearchFilter ---
+
+func TestApplySearchFilter(t *testing.T) {
+	sessions := []session.Info{
+		{Name: "frontend", WorkDir: "/home/user/webapp"},
+		{Name: "backend", WorkDir: "/home/user/api"},
+		{Name: "docs", WorkDir: "/home/user/documentation"},
+	}
+
+	t.Run("empty query returns all sessions", func(t *testing.T) {
+		si := textinput.New()
+		si.SetValue("")
+		m := Model{
+			sessions:    sessions,
+			searching:   true,
+			searchInput: si,
+		}
+		m.applySearchFilter()
+		if len(m.filteredSessions) != len(sessions) {
+			t.Errorf("applySearchFilter with empty query: got %d sessions, want %d",
+				len(m.filteredSessions), len(sessions))
+		}
+	})
+
+	t.Run("filter by name", func(t *testing.T) {
+		si := textinput.New()
+		si.SetValue("front")
+		m := Model{
+			sessions:    sessions,
+			searching:   true,
+			searchInput: si,
+		}
+		m.applySearchFilter()
+		if len(m.filteredSessions) != 1 {
+			t.Fatalf("applySearchFilter('front'): got %d sessions, want 1", len(m.filteredSessions))
+		}
+		if m.filteredSessions[0].Name != "frontend" {
+			t.Errorf("filtered session Name = %q, want %q", m.filteredSessions[0].Name, "frontend")
+		}
+	})
+
+	t.Run("filter by workdir", func(t *testing.T) {
+		si := textinput.New()
+		si.SetValue("api")
+		m := Model{
+			sessions:    sessions,
+			searching:   true,
+			searchInput: si,
+		}
+		m.applySearchFilter()
+		if len(m.filteredSessions) != 1 {
+			t.Fatalf("applySearchFilter('api'): got %d sessions, want 1", len(m.filteredSessions))
+		}
+		if m.filteredSessions[0].Name != "backend" {
+			t.Errorf("filtered session Name = %q, want %q", m.filteredSessions[0].Name, "backend")
+		}
+	})
+
+	t.Run("no matches", func(t *testing.T) {
+		si := textinput.New()
+		si.SetValue("nonexistent")
+		m := Model{
+			sessions:    sessions,
+			searching:   true,
+			searchInput: si,
+		}
+		m.applySearchFilter()
+		if len(m.filteredSessions) != 0 {
+			t.Errorf("applySearchFilter('nonexistent'): got %d sessions, want 0",
+				len(m.filteredSessions))
+		}
+	})
+
+	t.Run("case insensitive", func(t *testing.T) {
+		si := textinput.New()
+		si.SetValue("DOCS")
+		m := Model{
+			sessions:    sessions,
+			searching:   true,
+			searchInput: si,
+		}
+		m.applySearchFilter()
+		if len(m.filteredSessions) != 1 {
+			t.Fatalf("applySearchFilter('DOCS'): got %d sessions, want 1", len(m.filteredSessions))
+		}
+		if m.filteredSessions[0].Name != "docs" {
+			t.Errorf("filtered session Name = %q, want %q", m.filteredSessions[0].Name, "docs")
+		}
+	})
+}
+
+// --- s2time ---
+
+func TestS2time(t *testing.T) {
+	tests := []struct {
+		name string
+		nano int64
+	}{
+		{
+			name: "zero",
+			nano: 0,
+		},
+		{
+			name: "one second",
+			nano: int64(time.Second),
+		},
+		{
+			name: "specific timestamp",
+			nano: time.Date(2024, 6, 15, 12, 30, 0, 0, time.UTC).UnixNano(),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := s2time(tt.nano)
+			want := time.Unix(0, tt.nano)
+			if !got.Equal(want) {
+				t.Errorf("s2time(%d) = %v, want %v", tt.nano, got, want)
+			}
+		})
+	}
+}
+
+// --- computeDirHistory ---
+
+func TestComputeDirHistory(t *testing.T) {
+	now := time.Now()
+
+	t.Run("empty sessions returns empty", func(t *testing.T) {
+		got := computeDirHistory(nil, "local", 5)
+		if len(got) != 0 {
+			t.Errorf("computeDirHistory(nil) should return empty, got %d entries", len(got))
+		}
+	})
+
+	t.Run("deduplicates by WorkDir keeping most recent", func(t *testing.T) {
+		sessions := []session.Info{
+			{WorkDir: "/home/user/proj", LastActiveAt: now.Add(-2 * time.Hour)},
+			{WorkDir: "/home/user/proj", LastActiveAt: now.Add(-1 * time.Hour)},
+			{WorkDir: "/home/user/other", LastActiveAt: now.Add(-3 * time.Hour)},
+		}
+		got := computeDirHistory(sessions, "local", 5)
+		if len(got) != 2 {
+			t.Fatalf("computeDirHistory should deduplicate, got %d entries, want 2", len(got))
+		}
+		// Sorted by most recent first: /home/user/proj (1h ago), then /home/user/other (3h ago)
+		if got[0].Path != "/home/user/proj" {
+			t.Errorf("first entry Path = %q, want %q", got[0].Path, "/home/user/proj")
+		}
+		if got[1].Path != "/home/user/other" {
+			t.Errorf("second entry Path = %q, want %q", got[1].Path, "/home/user/other")
+		}
+	})
+
+	t.Run("sorted by LastActiveAt descending", func(t *testing.T) {
+		sessions := []session.Info{
+			{WorkDir: "/a", LastActiveAt: now.Add(-3 * time.Hour)},
+			{WorkDir: "/b", LastActiveAt: now.Add(-1 * time.Hour)},
+			{WorkDir: "/c", LastActiveAt: now.Add(-2 * time.Hour)},
+		}
+		got := computeDirHistory(sessions, "local", 5)
+		if len(got) != 3 {
+			t.Fatalf("got %d entries, want 3", len(got))
+		}
+		if got[0].Path != "/b" {
+			t.Errorf("first entry = %q, want /b (most recent)", got[0].Path)
+		}
+		if got[1].Path != "/c" {
+			t.Errorf("second entry = %q, want /c", got[1].Path)
+		}
+		if got[2].Path != "/a" {
+			t.Errorf("third entry = %q, want /a (oldest)", got[2].Path)
+		}
+	})
+
+	t.Run("limited to maxEntries", func(t *testing.T) {
+		sessions := []session.Info{
+			{WorkDir: "/a", LastActiveAt: now.Add(-1 * time.Hour)},
+			{WorkDir: "/b", LastActiveAt: now.Add(-2 * time.Hour)},
+			{WorkDir: "/c", LastActiveAt: now.Add(-3 * time.Hour)},
+			{WorkDir: "/d", LastActiveAt: now.Add(-4 * time.Hour)},
+		}
+		got := computeDirHistory(sessions, "local", 2)
+		if len(got) != 2 {
+			t.Fatalf("got %d entries, want 2 (maxEntries=2)", len(got))
+		}
+		if got[0].Path != "/a" {
+			t.Errorf("first entry = %q, want /a", got[0].Path)
+		}
+		if got[1].Path != "/b" {
+			t.Errorf("second entry = %q, want /b", got[1].Path)
+		}
+	})
+
+	t.Run("filters by hostID", func(t *testing.T) {
+		sessions := []session.Info{
+			{WorkDir: "/local/proj", HostID: "", LastActiveAt: now},
+			{WorkDir: "/remote/proj", HostID: "remote1", LastActiveAt: now},
+		}
+		got := computeDirHistory(sessions, "local", 5)
+		if len(got) != 1 {
+			t.Fatalf("got %d entries, want 1 (local only)", len(got))
+		}
+		if got[0].Path != "/local/proj" {
+			t.Errorf("entry Path = %q, want %q", got[0].Path, "/local/proj")
+		}
+	})
+
+	t.Run("filters by remote hostID", func(t *testing.T) {
+		sessions := []session.Info{
+			{WorkDir: "/local/proj", HostID: "", LastActiveAt: now},
+			{WorkDir: "/remote/proj", HostID: "remote1", LastActiveAt: now},
+		}
+		got := computeDirHistory(sessions, "remote1", 5)
+		if len(got) != 1 {
+			t.Fatalf("got %d entries, want 1 (remote1 only)", len(got))
+		}
+		if got[0].Path != "/remote/proj" {
+			t.Errorf("entry Path = %q, want %q", got[0].Path, "/remote/proj")
+		}
+	})
+
+	t.Run("skips sessions with empty WorkDir", func(t *testing.T) {
+		sessions := []session.Info{
+			{WorkDir: "", LastActiveAt: now},
+			{WorkDir: "/valid", LastActiveAt: now},
+		}
+		got := computeDirHistory(sessions, "local", 5)
+		if len(got) != 1 {
+			t.Fatalf("got %d entries, want 1 (empty WorkDir skipped)", len(got))
+		}
+		if got[0].Path != "/valid" {
+			t.Errorf("entry Path = %q, want %q", got[0].Path, "/valid")
+		}
+	})
 }
