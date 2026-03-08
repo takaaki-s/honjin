@@ -46,15 +46,15 @@ Hook Events:
 ## Package Dependency
 
 ```
-cmd/ccvalet/cmd/   → daemon (client), config, session (types only)
+cmd/ccvalet/cmd/   → daemon (client), config, session (types only), tui, tmux, host
                       │
 daemon/            → session, config, host, notify, tmux, tunnel
                       │
 session/           → config, tmux, notify, transcript
                       │
-host/              → config, tunnel, daemon (client)
+host/              → config, notify, session
                       │
-tui/               → daemon (client), config, session (Info type)
+tui/               → daemon (client), config, session (Info type), host
                       │
 config/            → (external: viper)
 tmux/              → (external: tmux CLI)

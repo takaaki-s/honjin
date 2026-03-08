@@ -15,7 +15,7 @@
 
 ## Debug Logging
 
-各パッケージに `debugEnabled` / `debugLog()` が重複配置されている（共通化されていない）。
+daemon と session パッケージに `debugEnabled` / `debugLog()` が重複配置されている（共通化されていない）。
 
 ```go
 var debugEnabled = os.Getenv("CCVALET_DEBUG") == "1"
@@ -55,4 +55,7 @@ func debugLog(format string, args ...interface{}) {
 
 ## Testing
 
-テストファイルは現時点で未整備。新規コードには `_test.go` ファイルを追加すること。
+カバレッジ約40%。全パッケージにテストファイルが存在する。
+標準ライブラリのみ使用（testify等なし）。同一パッケージテスト（`package X`）で非公開関数もテスト可能。
+テスタビリティのため `tmux.Runner` インターフェースを導入済み。
+新規コードには `_test.go` を追加すること。

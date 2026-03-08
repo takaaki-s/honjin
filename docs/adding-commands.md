@@ -49,11 +49,7 @@ resp, err := client.Send(daemon.Request{
 })
 ```
 
-### 4. セッション名の解決
-
-セッション名/ID の曖昧な指定を解決するには、既存の `resolveSessionName()` を使用する。
-
-### 5. コマンド階層
+### 4. コマンド階層
 
 ```
 ccvalet (root)
@@ -62,10 +58,16 @@ ccvalet (root)
 │   ├─ new
 │   ├─ list
 │   ├─ kill
+│   ├─ delete
 │   ├─ attach
-│   └─ ...
-├─ tui
+│   ├─ edit
+│   └─ workdir
+├─ tui (alias: ui)
 ├─ hook
+├─ cleanup stopped
+├─ create-popup   (Hidden, TUI popup用)
+├─ help-popup     (Hidden, TUI popup用)
+├─ notify-popup   (Hidden, TUI popup用)
 └─ (新規コマンドはここに追加)
 ```
 

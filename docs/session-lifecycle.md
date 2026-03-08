@@ -42,13 +42,15 @@ Session (永続化)
 ├─ ID              string    // UUID (Claude Code --session-id互換)
 ├─ Name            string    // 表示名 (デフォルト: WorkDirのbasename)
 ├─ WorkDir         string    // 作業ディレクトリ（hookのcwdで動的更新）
+├─ CreatedAt       time.Time // 作成日時
 ├─ Status          Status
+├─ LastActiveAt    time.Time
+├─ ErrorMessage    string    // エラーメッセージ（起動失敗時等）
 ├─ ClaudeSessionID string    // Claude Code セッションID
 ├─ ClaudeSessionStarted bool // --resume vs --session-id の判定用
-├─ TmuxWindowName  string    // inner tmuxセッション名
-├─ TmuxPaneID      string    // CC pane ID (例: "%42")
 ├─ HostID          string    // "local" or リモートホスト名
-└─ LastActiveAt    time.Time
+├─ TmuxWindowName  string    // inner tmuxセッション名
+└─ TmuxPaneID      string    // CC pane ID (例: "%42")
 
 Session (ランタイムのみ, json:"-")
 ├─ LastOutputTime  time.Time // idle安定性検出用
