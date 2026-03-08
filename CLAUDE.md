@@ -73,6 +73,16 @@ Go 1.24.5 / cobra (CLI) / bubbletea (TUI) / viper (config) / lipgloss (styling)
 
 詳細は README.md の「Claude Code Hooks設定」セクション参照。
 
+## Commit Convention
+
+コミットメッセージはConventional Commits形式を使用する（goreleaserのchangelog生成に使用）:
+- `feat:` 新機能
+- `fix:` バグ修正
+- `refactor:` リファクタリング
+- `docs:` ドキュメント
+- `test:` テスト
+- `chore:` その他（CI、依存関係など）
+
 ## Testing
 
 カバレッジ約40%。標準ライブラリのみ使用（testify等なし）。
