@@ -48,12 +48,12 @@ type Manager struct {
 	store      *Store
 	notifier   *notify.Notifier
 	configMgr  *config.Manager
-	tmuxClient *tmux.Client // tmux client for session management
+	tmuxClient tmux.Runner // tmux client for session management
 	mu         sync.RWMutex
 }
 
 // SetTmuxClient sets the tmux client for tmux-based session management.
-func (m *Manager) SetTmuxClient(tc *tmux.Client) {
+func (m *Manager) SetTmuxClient(tc tmux.Runner) {
 	m.tmuxClient = tc
 }
 

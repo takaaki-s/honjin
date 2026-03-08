@@ -17,11 +17,25 @@ clean:
 test:
 	go test -v ./...
 
+test-short:
+	go test -short -v ./...
+
+test-e2e:
+	go test -tags e2e -v ./test/e2e/
+
+test-race:
+	go test -race ./...
+
+test-coverage:
+	go test -coverprofile=coverage.out ./...
+	go tool cover -func=coverage.out
+	@echo "HTML report: go tool cover -html=coverage.out -o coverage.html"
+
 fmt:
 	go fmt ./...
 
 lint:
-	go vet ./...
+	golangci-lint run ./...
 
 # Deploy to EC2 (Ubuntu)
 deploy-ec2:
