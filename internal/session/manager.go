@@ -76,15 +76,7 @@ func (m *Manager) recoverTmuxSessionsLocked() {
 			continue
 		}
 
-		// Use pane ID if available, otherwise get from tmux (avoids base-index issues)
 		target := session.TmuxPaneID
-		if target == "" {
-			if id, err := m.tmuxClient.GetPaneID(session.TmuxWindowName); err == nil {
-				target = id
-			} else {
-				target = session.TmuxWindowName + ":0.0"
-			}
-		}
 
 		// Check if pane is dead — keep TmuxWindowName (session alive via remain-on-exit)
 		if m.tmuxClient.IsPaneDead(target) {
@@ -439,14 +431,6 @@ func (m *Manager) startSessionTmux(session *Session) error {
 	// Try to revive CC in existing inner tmux session (preserves user panes)
 	if session.TmuxWindowName != "" && m.tmuxClient.HasSession(session.TmuxWindowName) {
 		target := session.TmuxPaneID
-		if target == "" {
-			// Fallback: get pane ID from session (avoids base-index issues with ":0.0")
-			if id, err := m.tmuxClient.GetPaneID(session.TmuxWindowName); err == nil {
-				target = id
-			} else {
-				target = session.TmuxWindowName + ":0.0"
-			}
-		}
 		if err := m.tmuxClient.RespawnPane(target, shellCmd); err == nil {
 			session.Status = StatusRunning
 			session.LastOutputTime = time.Now()
