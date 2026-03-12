@@ -99,6 +99,9 @@ ccvalet session new --workdir ~/repos/myrepo
 # List sessions
 ccvalet session list
 
+# List sessions in JSON format (for scripting / LLM integration)
+ccvalet session list --json
+
 # Attach to a session
 ccvalet session attach <session-name>
 

@@ -99,6 +99,9 @@ ccvalet session new --workdir ~/repos/myrepo
 # セッション一覧
 ccvalet session list
 
+# JSON形式で出力（スクリプト / LLM連携用）
+ccvalet session list --json
+
 # セッションにアタッチ
 ccvalet session attach <session-name>
 
