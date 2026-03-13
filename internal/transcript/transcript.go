@@ -59,6 +59,69 @@ func (r *Reader) GetLastMessages(workDir, sessionID string) (*LastMessages, erro
 	return r.readLastMessages(transcriptPath)
 }
 
+// GetConversation returns the last N user/assistant message pairs from the transcript.
+// lastN specifies the number of message pairs to return.
+func (r *Reader) GetConversation(workDir, sessionID string, lastN int) ([]Message, error) {
+	if sessionID == "" {
+		return nil, nil
+	}
+
+	transcriptPath := r.getTranscriptPath(workDir, sessionID)
+	return r.readConversation(transcriptPath, lastN)
+}
+
+// readConversation reads the transcript and returns the last N*2 user/assistant messages.
+func (r *Reader) readConversation(filePath string, lastN int) ([]Message, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer file.Close()
+
+	var allMessages []Message
+	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var entry transcriptEntry
+		if err := json.Unmarshal(line, &entry); err != nil {
+			continue
+		}
+
+		if entry.Type != "user" && entry.Type != "assistant" {
+			continue
+		}
+
+		content := extractFullContent(&entry)
+		if content == "" {
+			continue
+		}
+
+		allMessages = append(allMessages, Message{
+			Type:      entry.Type,
+			Content:   content,
+			Timestamp: entry.Timestamp,
+		})
+	}
+
+	// Return last N*2 messages
+	maxMessages := lastN * 2
+	if len(allMessages) > maxMessages {
+		allMessages = allMessages[len(allMessages)-maxMessages:]
+	}
+
+	return allMessages, nil
+}
+
 // readLastMessages reads the transcript file and returns the last user and assistant messages
 func (r *Reader) readLastMessages(filePath string) (*LastMessages, error) {
 	file, err := os.Open(filePath)
@@ -225,6 +288,39 @@ func extractContent(entry *transcriptEntry) string {
 			}
 			if len(texts) > 0 {
 				return cleanContent(strings.Join(texts, " "))
+			}
+		}
+	}
+
+	return ""
+}
+
+// extractFullContent extracts the text content without cleaning (preserves newlines).
+func extractFullContent(entry *transcriptEntry) string {
+	if entry.Message.Content == nil {
+		return ""
+	}
+
+	if entry.Type == "user" {
+		if str, ok := entry.Message.Content.(string); ok {
+			return strings.TrimSpace(str)
+		}
+	}
+
+	if entry.Type == "assistant" {
+		if arr, ok := entry.Message.Content.([]any); ok {
+			var texts []string
+			for _, item := range arr {
+				if block, ok := item.(map[string]any); ok {
+					if blockType, ok := block["type"].(string); ok && blockType == "text" {
+						if text, ok := block["text"].(string); ok {
+							texts = append(texts, text)
+						}
+					}
+				}
+			}
+			if len(texts) > 0 {
+				return strings.Join(texts, "\n")
 			}
 		}
 	}

@@ -2,10 +2,19 @@ package cmd
 
 import (
 	"fmt"
+	"io"
+	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/takaaki-s/claude-code-valet/internal/daemon"
+	"github.com/takaaki-s/claude-code-valet/internal/exitcode"
 )
+
+type actionResult struct {
+	Success bool   `json:"success"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+}
 
 var killCmd = &cobra.Command{
 	Use:               "kill <session-name>",
@@ -24,6 +33,9 @@ var killCmd = &cobra.Command{
 
 		if err := client.Kill(sessionID, ""); err != nil {
 			return err
+		}
+		if jsonOutput {
+			return renderActionResultJSON(os.Stdout, actionResult{Success: true, ID: sessionID, Name: sessionName})
 		}
 		fmt.Printf("Killed session: %s\n", sessionName)
 		return nil
@@ -49,6 +61,9 @@ var deleteCmd = &cobra.Command{
 		if err := client.Delete(sessionID, ""); err != nil {
 			return err
 		}
+		if jsonOutput {
+			return renderActionResultJSON(os.Stdout, actionResult{Success: true, ID: sessionID, Name: sessionName})
+		}
 		fmt.Printf("Deleted session: %s\n", sessionName)
 		return nil
 	},
@@ -67,7 +82,11 @@ func resolveSession(client *daemon.Client, nameOrID string) (id, name string, er
 		}
 	}
 
-	return "", "", fmt.Errorf("session not found: %s", nameOrID)
+	return "", "", exitcode.Errorf(exitcode.SessionNotFound, "session not found: %s", nameOrID)
+}
+
+func renderActionResultJSON(w io.Writer, result actionResult) error {
+	return writeJSON(w, result)
 }
 
 func init() {

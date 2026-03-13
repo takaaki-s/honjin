@@ -2,10 +2,12 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/takaaki-s/claude-code-valet/internal/daemon"
+	"github.com/takaaki-s/claude-code-valet/internal/session"
 )
 
 var newCmd = &cobra.Command{
@@ -67,6 +69,10 @@ For interactive session creation, use 'ccvalet ui' (TUI).`,
 			return err
 		}
 
+		if jsonOutput {
+			return renderNewSessionJSON(os.Stdout, s)
+		}
+
 		fmt.Printf("Created session: %s (%s)\n", s.Name, s.ID)
 		fmt.Printf("Working directory: %s\n", s.WorkDir)
 		fmt.Printf("Status: %s\n", s.Status)
@@ -82,6 +88,10 @@ func init() {
 	newCmd.Flags().StringP("name", "n", "", "Session name (default: directory basename)")
 	newCmd.Flags().StringP("host", "H", "", "Target host (default: local)")
 	newCmd.Flags().Bool("no-start", false, "Don't start the session immediately")
+}
+
+func renderNewSessionJSON(w io.Writer, info *session.Info) error {
+	return writeJSON(w, info)
 }
 
 func getDataDir() string {

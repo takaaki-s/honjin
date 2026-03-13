@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,10 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/takaaki-s/claude-code-valet/internal/daemon"
 )
+
+type daemonStatusResult struct {
+	Running bool `json:"running"`
+}
 
 var socketPathFlag string
 
@@ -48,17 +53,17 @@ var daemonStartCmd = &cobra.Command{
 		if socketPathFlag != "" {
 			daemonArgs = append(daemonArgs, "--socket", socketPathFlag)
 		}
-		daemonCmd := exec.Command(exe, daemonArgs...)
-		daemonCmd.Env = os.Environ() // Inherit environment variables
-		daemonCmd.Stdout = nil
-		daemonCmd.Stderr = nil
-		daemonCmd.Stdin = nil
+		bgCmd := exec.Command(exe, daemonArgs...)
+		bgCmd.Env = os.Environ() // Inherit environment variables
+		bgCmd.Stdout = nil
+		bgCmd.Stderr = nil
+		bgCmd.Stdin = nil
 
-		if err := daemonCmd.Start(); err != nil {
+		if err := bgCmd.Start(); err != nil {
 			return err
 		}
 
-		fmt.Printf("Daemon started (PID: %d)\n", daemonCmd.Process.Pid)
+		fmt.Printf("Daemon started (PID: %d)\n", bgCmd.Process.Pid)
 		return nil
 	},
 }
@@ -68,7 +73,11 @@ var daemonStatusCmd = &cobra.Command{
 	Short: "Check daemon status",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := daemon.NewClient(getSocketPath())
-		if client.IsRunning() {
+		running := client.IsRunning()
+		if jsonOutput {
+			return renderDaemonStatusJSON(os.Stdout, daemonStatusResult{Running: running})
+		}
+		if running {
 			fmt.Println("Daemon is running")
 		} else {
 			fmt.Println("Daemon is not running")
@@ -111,6 +120,10 @@ func init() {
 
 	// --socket flag: specify custom socket path for slave mode
 	daemonCmd.PersistentFlags().StringVar(&socketPathFlag, "socket", "", "custom socket path (for slave mode)")
+}
+
+func renderDaemonStatusJSON(w io.Writer, result daemonStatusResult) error {
+	return writeJSON(w, result)
 }
 
 func getSocketPath() string {

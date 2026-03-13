@@ -13,4 +13,6 @@ type Runner interface {
 	SetupAutoCleanDeadPanes() error
 	KillPane(paneID string) error
 	GetPaneCurrentPath(target string) (string, error)
+	SendKeys(target, keys string) error
+	SendKeysLiteral(target, text string) error
 }
