@@ -451,3 +451,115 @@ func TestCleanContent_CarriageReturnNewline(t *testing.T) {
 		t.Errorf("expected no CR/LF, got %q", got)
 	}
 }
+
+func TestGetConversation(t *testing.T) {
+	tmpDir := t.TempDir()
+	r := &Reader{claudeDir: tmpDir}
+
+	workDir := "/test/project"
+	sessionID := "sess-conv"
+	transcriptPath := r.getTranscriptPath(workDir, sessionID)
+
+	entries := []transcriptEntry{
+		{
+			Type:      "user",
+			Message:   msgObject{Role: "user", Content: "first question"},
+			Timestamp: "2024-01-01T00:00:00Z",
+		},
+		{
+			Type: "assistant",
+			Message: msgObject{
+				Role:    "assistant",
+				Content: []any{map[string]any{"type": "text", "text": "first answer"}},
+			},
+			Timestamp: "2024-01-01T00:00:01Z",
+		},
+		{
+			Type:      "user",
+			Message:   msgObject{Role: "user", Content: "second question"},
+			Timestamp: "2024-01-01T00:00:02Z",
+		},
+		{
+			Type: "assistant",
+			Message: msgObject{
+				Role:    "assistant",
+				Content: []any{map[string]any{"type": "text", "text": "second answer"}},
+			},
+			Timestamp: "2024-01-01T00:00:03Z",
+		},
+		{
+			Type:      "user",
+			Message:   msgObject{Role: "user", Content: "third question"},
+			Timestamp: "2024-01-01T00:00:04Z",
+		},
+		{
+			Type: "assistant",
+			Message: msgObject{
+				Role:    "assistant",
+				Content: []any{map[string]any{"type": "text", "text": "third answer"}},
+			},
+			Timestamp: "2024-01-01T00:00:05Z",
+		},
+	}
+	writeJSONL(t, transcriptPath, entries)
+
+	t.Run("last 1 pair", func(t *testing.T) {
+		msgs, err := r.GetConversation(workDir, sessionID, 1)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(msgs) != 2 {
+			t.Fatalf("expected 2 messages, got %d", len(msgs))
+		}
+		if msgs[0].Type != "user" || msgs[0].Content != "third question" {
+			t.Errorf("unexpected first message: %+v", msgs[0])
+		}
+		if msgs[1].Type != "assistant" || msgs[1].Content != "third answer" {
+			t.Errorf("unexpected second message: %+v", msgs[1])
+		}
+	})
+
+	t.Run("last 2 pairs", func(t *testing.T) {
+		msgs, err := r.GetConversation(workDir, sessionID, 2)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(msgs) != 4 {
+			t.Fatalf("expected 4 messages, got %d", len(msgs))
+		}
+		if msgs[0].Content != "second question" {
+			t.Errorf("expected %q, got %q", "second question", msgs[0].Content)
+		}
+	})
+
+	t.Run("last N exceeds total", func(t *testing.T) {
+		msgs, err := r.GetConversation(workDir, sessionID, 100)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(msgs) != 6 {
+			t.Fatalf("expected 6 messages, got %d", len(msgs))
+		}
+	})
+
+	t.Run("empty session ID", func(t *testing.T) {
+		msgs, err := r.GetConversation(workDir, "", 1)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if msgs != nil {
+			t.Errorf("expected nil, got %v", msgs)
+		}
+	})
+}
+
+func TestExtractFullContent_PreservesNewlines(t *testing.T) {
+	entry := &transcriptEntry{
+		Type:    "user",
+		Message: msgObject{Role: "user", Content: "line1\nline2\nline3"},
+	}
+	got := extractFullContent(entry)
+	if !strings.Contains(got, "\n") {
+		t.Errorf("expected newlines preserved, got %q", got)
+	}
+}

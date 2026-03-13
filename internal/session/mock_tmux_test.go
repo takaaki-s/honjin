@@ -90,6 +90,16 @@ func (m *mockTmuxRunner) GetPaneCurrentPath(target string) (string, error) {
 	return "", fmt.Errorf("no pane path for target %s", target)
 }
 
+func (m *mockTmuxRunner) SendKeys(target, keys string) error {
+	m.record("SendKeys", target, keys)
+	return nil
+}
+
+func (m *mockTmuxRunner) SendKeysLiteral(target, text string) error {
+	m.record("SendKeysLiteral", target, text)
+	return nil
+}
+
 // hasCalledWith returns true if the mock recorded a call to the given method
 // where the first argument matches arg.
 func (m *mockTmuxRunner) hasCalledWith(method, arg string) bool {

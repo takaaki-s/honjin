@@ -106,6 +106,40 @@ func (c *Client) NewWithOptions(opts NewOptions) (*session.Info, error) {
 	return &info, nil
 }
 
+// Get retrieves a single session by ID
+func (c *Client) Get(id string) (*session.Info, error) {
+	data, _ := json.Marshal(struct {
+		ID string `json:"id"`
+	}{ID: id})
+
+	resp, err := c.send(Request{Action: "get", Data: data})
+	if err != nil {
+		return nil, err
+	}
+	if !resp.Success {
+		return nil, errors.New(resp.Error)
+	}
+
+	var info session.Info
+	if err := json.Unmarshal(resp.Data, &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
+// Send sends a prompt to a session
+func (c *Client) Send(id, prompt string) error {
+	data, _ := json.Marshal(SendRequest{ID: id, Prompt: prompt})
+	resp, err := c.send(Request{Action: "send", Data: data})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
 // List lists all sessions
 func (c *Client) List() ([]session.Info, error) {
 	resp, err := c.send(Request{Action: "list"})

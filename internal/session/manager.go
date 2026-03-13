@@ -270,6 +270,38 @@ func (m *Manager) SetStatus(id string, status Status) {
 	}
 }
 
+// SendPrompt sends a prompt to a session's tmux pane.
+// The session must be in idle status.
+func (m *Manager) SendPrompt(id, prompt string) error {
+	m.mu.RLock()
+	sess, ok := m.sessions[id]
+	if !ok {
+		m.mu.RUnlock()
+		return fmt.Errorf("session not found: %s", id)
+	}
+	if sess.Status != StatusIdle {
+		m.mu.RUnlock()
+		return fmt.Errorf("session is not idle (current status: %s)", sess.Status)
+	}
+	paneID := sess.TmuxPaneID
+	m.mu.RUnlock()
+
+	if paneID == "" {
+		return fmt.Errorf("session has no tmux pane")
+	}
+	if m.tmuxClient == nil {
+		return fmt.Errorf("tmux client not available")
+	}
+
+	if err := m.tmuxClient.SendKeysLiteral(paneID, prompt); err != nil {
+		return fmt.Errorf("failed to send prompt: %w", err)
+	}
+	if err := m.tmuxClient.SendKeys(paneID, "Enter"); err != nil {
+		return fmt.Errorf("failed to send Enter: %w", err)
+	}
+	return nil
+}
+
 // SetStatusWithError updates the status and error message of a session
 func (m *Manager) SetStatusWithError(id string, status Status, errMsg string) {
 	m.mu.Lock()

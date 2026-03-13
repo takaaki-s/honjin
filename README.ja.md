@@ -105,6 +105,22 @@ ccvalet session list --json
 # セッションにアタッチ
 ccvalet session attach <session-name>
 
+# セッションの詳細情報を取得
+ccvalet session info <session-name>
+
+# セッションにプロンプトを送信
+ccvalet session send <session-name> "プロンプト"
+
+# セッションが idle になるまで待機（デフォルトタイムアウト: 300秒）
+ccvalet session wait <session-name>
+ccvalet session wait <session-name> --timeout 60
+
+# 最後のアシスタントメッセージを取得
+ccvalet session output <session-name>
+
+# 直近 N 往復の会話を取得
+ccvalet session output <session-name> --last 3
+
 # セッション終了
 ccvalet session kill <session-name>
 
@@ -117,6 +133,45 @@ ccvalet cleanup stopped --dry-run   # 削除対象の確認
 ```
 
 > **エイリアス**: `session` は `sess` でも可（例: `ccvalet sess list`）。`list` は `ls`、`delete` は `rm` でも可。
+
+### ユーティリティ
+
+```bash
+ccvalet session workdir <session-name>    # セッションの作業ディレクトリパスを出力
+ccvalet session edit <session-name>       # EDITOR でセッションの作業ディレクトリを開く
+```
+
+### LLM API（スクリプト / 自動化）
+
+以下のコマンドは `--json` フラグに対応しており、スクリプトや他の LLM エージェントとの連携が可能です。
+
+```bash
+# 全セッションコマンドが --json に対応
+ccvalet session list --json
+ccvalet session new --workdir ~/repos/myrepo --json
+ccvalet session info <session-name> --json
+ccvalet session kill <session-name> --json
+
+# プロンプト送信 → 完了待機 → 出力取得
+ccvalet session send <session-name> "テストを修正して" --json
+ccvalet session wait <session-name> --timeout 120 --json
+ccvalet session output <session-name> --json
+
+# パイプライン例: プロンプト送信 → 待機 → 出力取得
+ccvalet session send my-session "main.go をリファクタリング"
+ccvalet session wait my-session --timeout 300
+ccvalet session output my-session --last 1
+```
+
+#### 終了コード
+
+| コード | 意味 |
+|--------|------|
+| 0 | 成功 |
+| 1 | 一般エラー |
+| 2 | セッションが見つからない |
+| 3 | デーモン未起動 |
+| 4 | タイムアウト（`session wait`） |
 
 ### ユーティリティ
 

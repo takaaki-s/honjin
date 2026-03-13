@@ -21,6 +21,7 @@ import (
 	"github.com/takaaki-s/claude-code-valet/internal/notify"
 	"github.com/takaaki-s/claude-code-valet/internal/session"
 	"github.com/takaaki-s/claude-code-valet/internal/tmux"
+	"github.com/takaaki-s/claude-code-valet/internal/transcript"
 	"github.com/takaaki-s/claude-code-valet/internal/tunnel"
 )
 
@@ -178,6 +179,10 @@ func (s *Server) handleRequest(req *Request) Response {
 		return s.handleNew(req.Data)
 	case "list":
 		return s.handleList()
+	case "get":
+		return s.handleGet(req.Data)
+	case "send":
+		return s.handleSend(req.Data)
 	case "start":
 		return s.handleStart(req.Data)
 	case "kill":
@@ -382,6 +387,59 @@ func (s *Server) handleList() Response {
 
 	data, _ := json.Marshal(allSessions)
 	return Response{Success: true, Data: data}
+}
+
+func (s *Server) handleGet(data json.RawMessage) Response {
+	var req IDRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		return Response{Success: false, Error: err.Error()}
+	}
+
+	sess, ok := s.manager.Get(req.ID)
+	if !ok {
+		return Response{Success: false, Error: fmt.Sprintf("session not found: %s", req.ID)}
+	}
+
+	info := sess.ToInfo()
+	if info.HostID == "" {
+		info.HostID = "local"
+	}
+
+	// Enrich with transcript data
+	reader := transcript.NewReader()
+	if info.ClaudeSessionID != "" && info.WorkDir != "" {
+		if msgs, err := reader.GetLastMessages(info.WorkDir, info.ClaudeSessionID); err == nil && msgs != nil {
+			if msgs.User != nil {
+				info.LastUserMessage = transcript.TruncateMessage(msgs.User.Content, 500)
+			}
+			if msgs.Assistant != nil {
+				info.LastAssistantMessage = transcript.TruncateMessageFromEnd(msgs.Assistant.Content, 500)
+			}
+		}
+	}
+
+	respData, _ := json.Marshal(info)
+	return Response{Success: true, Data: respData}
+}
+
+// SendRequest is the request payload for the "send" action
+type SendRequest struct {
+	ID     string `json:"id"`
+	Prompt string `json:"prompt"`
+}
+
+func (s *Server) handleSend(data json.RawMessage) Response {
+	var req SendRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		return Response{Success: false, Error: err.Error()}
+	}
+	if req.Prompt == "" {
+		return Response{Success: false, Error: "prompt is required"}
+	}
+	if err := s.manager.SendPrompt(req.ID, req.Prompt); err != nil {
+		return Response{Success: false, Error: err.Error()}
+	}
+	return Response{Success: true}
 }
 
 type IDRequest struct {
