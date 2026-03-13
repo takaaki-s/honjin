@@ -46,6 +46,7 @@ func printJSONError(err error, code int) {
 		Error:    err.Error(),
 		ExitCode: code,
 	}
+	// All fields are bool/string/int — json.Marshal cannot fail.
 	data, _ := json.Marshal(result)
 	fmt.Fprintln(os.Stdout, string(data))
 }

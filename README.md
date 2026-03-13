@@ -105,6 +105,22 @@ ccvalet session list --json
 # Attach to a session
 ccvalet session attach <session-name>
 
+# Get session details
+ccvalet session info <session-name>
+
+# Send a prompt to a session
+ccvalet session send <session-name> "your prompt here"
+
+# Wait for a session to become idle (default timeout: 300s)
+ccvalet session wait <session-name>
+ccvalet session wait <session-name> --timeout 60
+
+# Get the last assistant message
+ccvalet session output <session-name>
+
+# Get the last N conversation pairs
+ccvalet session output <session-name> --last 3
+
 # Kill a session
 ccvalet session kill <session-name>
 
@@ -117,6 +133,45 @@ ccvalet cleanup stopped --dry-run   # Preview what will be deleted
 ```
 
 > **Aliases**: `session` can be shortened to `sess` (e.g., `ccvalet sess list`). `list` to `ls`, `delete` to `rm`.
+
+### Utilities
+
+```bash
+ccvalet session workdir <session-name>    # Print session's working directory path
+ccvalet session edit <session-name>       # Open session's working directory in EDITOR
+```
+
+### LLM API (scripting / automation)
+
+The following commands support `--json` for structured output, enabling integration with scripts and other LLM agents.
+
+```bash
+# All session commands support --json
+ccvalet session list --json
+ccvalet session new --workdir ~/repos/myrepo --json
+ccvalet session info <session-name> --json
+ccvalet session kill <session-name> --json
+
+# Send a prompt and wait for completion
+ccvalet session send <session-name> "fix the failing test" --json
+ccvalet session wait <session-name> --timeout 120 --json
+ccvalet session output <session-name> --json
+
+# Pipeline example: send a prompt, wait, get output
+ccvalet session send my-session "refactor main.go"
+ccvalet session wait my-session --timeout 300
+ccvalet session output my-session --last 1
+```
+
+#### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | General error |
+| 2 | Session not found |
+| 3 | Daemon not running |
+| 4 | Timeout (`session wait`) |
 
 ### Utilities
 

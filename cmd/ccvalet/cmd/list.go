@@ -25,10 +25,7 @@ var listCmd = &cobra.Command{
 		}
 
 		if jsonOutput {
-			if sessions == nil {
-				sessions = []session.Info{}
-			}
-			return printJSON(sessions)
+			return renderSessionListJSON(os.Stdout, sessions)
 		}
 
 		if len(sessions) == 0 {
