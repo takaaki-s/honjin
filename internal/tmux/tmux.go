@@ -520,6 +520,22 @@ func (c *Client) GetPaneCurrentPath(target string) (string, error) {
 	return c.run("display-message", "-t", target, "-p", "#{pane_current_path}")
 }
 
+// GetPaneTTY returns the TTY path of a pane (e.g., "/dev/ttys005").
+func (c *Client) GetPaneTTY(target string) (string, error) {
+	return c.run("display-message", "-t", target, "-p", "#{pane_tty}")
+}
+
+// SwitchClient switches an inner tmux client (identified by its TTY) to a different session.
+// This avoids killing the tmux attach process, preventing "pane is dead" issues.
+func (c *Client) SwitchClient(clientTTY, targetSession string) error {
+	return c.runSilent("switch-client", "-c", clientTTY, "-t", targetSession)
+}
+
+// DetachClientByTTY detaches the tmux client identified by its TTY path.
+func (c *Client) DetachClientByTTY(clientTTY string) error {
+	return c.runSilent("detach-client", "-t", clientTTY)
+}
+
 // --- Popup ---
 
 // DisplayPopupOptions configures a tmux display-popup.

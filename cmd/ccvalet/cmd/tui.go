@@ -263,7 +263,10 @@ func runTUIInner() error {
 		_ = tc.SetEnvironment(tmux.SessionName, "CCVALET_DISPLAY_PANE", displayPaneID)
 	}
 
-	model := tui.NewModelWithTmux(client, tc, tuiPaneID, displayPaneID)
+	// Create inner tmux client (-L ccvalet) for switch-client operations
+	innerTC, _ := tmux.NewClient()
+
+	model := tui.NewModelWithTmux(client, tc, innerTC, tuiPaneID, displayPaneID)
 
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithReportFocus())
 	if _, err := p.Run(); err != nil {

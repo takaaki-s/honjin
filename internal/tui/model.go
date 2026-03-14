@@ -44,10 +44,10 @@ type KeyMap struct {
 	Notifications key.Binding
 
 	// Session creation form
-	NextField      key.Binding
-	PrevField      key.Binding
-	Submit key.Binding
-	CancelForm     key.Binding
+	NextField  key.Binding
+	PrevField  key.Binding
+	Submit     key.Binding
+	CancelForm key.Binding
 }
 
 // NewKeyMap creates a KeyMap from config
@@ -160,11 +160,13 @@ type Model struct {
 	focused bool // true when TUI pane has focus (changes border/title color)
 
 	// tmux integration
-	tmuxClient       *tmux.Client // outer tmux client (-L ccvalet-mgr, nil in legacy mode)
-	tuiPaneID        string       // TUI pane unique ID (e.g. "%42") in outer tmux
-	displayPaneID    string       // Right pane unique ID (for session display) in outer tmux
-	currentSessionID string       // Session ID currently displayed in right pane
-	switchSeq        int          // Sequence number for cursor movement debounce
+	tmuxClient         *tmux.Client // outer tmux client (-L ccvalet-mgr, nil in legacy mode)
+	innerTmuxClient    *tmux.Client // inner tmux client (-L ccvalet, for switch-client)
+	tuiPaneID          string       // TUI pane unique ID (e.g. "%42") in outer tmux
+	displayPaneID      string       // Right pane unique ID (for session display) in outer tmux
+	currentSessionID   string       // Session ID currently displayed in right pane
+	switchSeq          int          // Sequence number for cursor movement debounce
+	displayLocalAttach bool         // true when display pane is running tmux attach to inner tmux
 
 	// Focus after create
 	focusSessionID string // Session ID to focus after creation
@@ -215,9 +217,10 @@ func NewModel(client *daemon.Client) Model {
 // NewModelWithTmux creates a new TUI model with tmux integration.
 // The outer tmux (-L ccvalet-mgr) has a fixed 2-pane layout:
 // left pane (TUI) + right pane (session display via RespawnPane).
-func NewModelWithTmux(client *daemon.Client, tc *tmux.Client, tuiPaneID, displayPaneID string) Model {
+func NewModelWithTmux(client *daemon.Client, tc, innerTC *tmux.Client, tuiPaneID, displayPaneID string) Model {
 	m := NewModel(client)
 	m.tmuxClient = tc
+	m.innerTmuxClient = innerTC
 	m.tuiPaneID = tuiPaneID
 	m.displayPaneID = displayPaneID
 	// Restore which session was displayed (for reattach)
@@ -375,6 +378,17 @@ func (m *Model) switchToSession(sessionID string) {
 		return
 	}
 
+	// Determine if the target is a local alive session
+	isLocalAlive := isSessionAlive(sess.Status) && sess.TmuxWindowName != "" &&
+		(sess.HostID == "" || sess.HostID == "local")
+
+	// When switching away from a local attach, detach the inner tmux client first
+	// so that "tmux attach" exits cleanly and avoids "pane is dead".
+	if !isLocalAlive && m.displayLocalAttach {
+		m.detachInnerClient()
+		m.displayLocalAttach = false
+	}
+
 	// Stopped/error sessions: show placeholder in right pane (no TmuxWindowName needed)
 	if !isSessionAlive(sess.Status) {
 		var placeholderCmd string
@@ -408,13 +422,54 @@ func (m *Model) switchToSession(sessionID string) {
 		return
 	}
 
+	// Local alive session: prefer switch-client over respawn-pane to avoid "pane is dead"
+	if m.displayLocalAttach && m.innerTmuxClient != nil {
+		paneTTY, err := m.tmuxClient.GetPaneTTY(m.displayPaneID)
+		if err == nil && paneTTY != "" {
+			if m.innerTmuxClient.SwitchClient(paneTTY, sess.TmuxWindowName) == nil {
+				m.currentSessionID = sessionID
+				_ = m.tmuxClient.SetEnvironment(tmux.SessionName, "CCVALET_CURRENT_SESSION", sessionID)
+				_ = m.tmuxClient.SetPaneOption(m.displayPaneID, "@session_name", sess.Name)
+				return
+			}
+		}
+		// switch-client failed — fall through to respawn
+	}
+
 	// Local: respawn right pane with inner tmux attach
 	attachCmd := fmt.Sprintf("tmux -L %s attach -t %s", tmux.SocketName, sess.TmuxWindowName)
 	_ = m.tmuxClient.RespawnPane(m.displayPaneID, attachCmd)
+	m.displayLocalAttach = true
 
 	m.currentSessionID = sessionID
 	_ = m.tmuxClient.SetEnvironment(tmux.SessionName, "CCVALET_CURRENT_SESSION", sessionID)
 	_ = m.tmuxClient.SetPaneOption(m.displayPaneID, "@session_name", sess.Name)
+}
+
+// detachInnerClient detaches the inner tmux client running in the display pane.
+// This makes the "tmux attach" process exit cleanly, preventing "pane is dead".
+func (m *Model) detachInnerClient() {
+	if m.innerTmuxClient == nil {
+		return
+	}
+	paneTTY, err := m.tmuxClient.GetPaneTTY(m.displayPaneID)
+	if err != nil || paneTTY == "" {
+		return
+	}
+	_ = m.innerTmuxClient.DetachClientByTTY(paneTTY)
+}
+
+// respawnPlaceholder replaces the display pane with a placeholder command.
+// Detaches any active inner tmux client first to avoid "pane is dead".
+func (m *Model) respawnPlaceholder() {
+	if m.tmuxClient == nil || m.displayPaneID == "" {
+		return
+	}
+	if m.displayLocalAttach {
+		m.detachInnerClient()
+		m.displayLocalAttach = false
+	}
+	_ = m.tmuxClient.RespawnPane(m.displayPaneID, tmux.PlaceholderCmd)
 }
 
 // isSessionAlive returns true if the session status indicates an active process.
@@ -862,15 +917,14 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Reconnect to session at cursor after delete/kill
 		if m.needsReswitch {
 			m.needsReswitch = false
-			m.currentSessionID = "" // Force reset
+			m.currentSessionID = ""          // Force reset
+			m.displayLocalAttach = false     // Pane process is dead after delete/kill
 			pageSessions := m.getPageSessions()
 			if len(pageSessions) > 0 && m.cursor < len(pageSessions) {
 				m.switchToSession(pageSessions[m.cursor].ID)
 			} else {
-				// Return to placeholder if no sessions remain
-				if m.tmuxClient != nil && m.displayPaneID != "" {
-					_ = m.tmuxClient.RespawnPane(m.displayPaneID, tmux.PlaceholderCmd)
-				}
+				m.respawnPlaceholder()
+
 			}
 			m.processingMsg = ""
 			return m, nil
@@ -881,9 +935,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.sessions) == 0 {
 			if m.currentSessionID != "_empty" {
 				m.currentSessionID = "_empty"
-				if m.tmuxClient != nil && m.displayPaneID != "" {
-					_ = m.tmuxClient.RespawnPane(m.displayPaneID, tmux.PlaceholderCmd)
-				}
+				m.respawnPlaceholder()
 			}
 			m.processingMsg = ""
 			return m, nil
@@ -902,8 +954,8 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 				pageSessions := m.getPageSessions()
 				if len(pageSessions) > 0 && m.cursor < len(pageSessions) {
 					m.switchToSession(pageSessions[m.cursor].ID)
-				} else if m.tmuxClient != nil && m.displayPaneID != "" {
-					_ = m.tmuxClient.RespawnPane(m.displayPaneID, tmux.PlaceholderCmd)
+				} else {
+					m.respawnPlaceholder()
 				}
 			}
 		}
