@@ -433,7 +433,7 @@ tail -f ~/.ccvalet/debug.log
 
 ## Requirements
 
-- Go 1.21+
+- Go 1.24.5+
 - tmux 3.3+
 - Claude Code CLI installed
 
