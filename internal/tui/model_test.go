@@ -702,23 +702,23 @@ func TestGetItemsPerPage(t *testing.T) {
 		{
 			name:   "tall terminal",
 			height: 40,
-			// availableLines = 40 - 8 - 2 = 30, items = 30/4 = 7
+			// availableLines = 40 - 8 = 32, items = 32/4 = 8
 		},
 		{
 			name:   "short terminal",
 			height: 10,
-			// availableLines = 10 - 8 - 2 = 0, clamped to 4, items = 4/4 = 1
+			// availableLines = 10 - 8 = 2, clamped to 4, items = 4/4 = 1
 		},
 		{
 			name:      "with search bar",
 			height:    40,
 			searching: true,
-			// availableLines = 40 - 8 - 1 - 2 = 29, items = 29/4 = 7
+			// availableLines = 40 - 8 - 1 = 31, items = 31/4 = 7
 		},
 		{
 			name:   "very short terminal",
 			height: 5,
-			// availableLines = 5 - 8 - 2 = -5, clamped to 4, items = 4/4 = 1
+			// availableLines = 5 - 8 = -3, clamped to 4, items = 4/4 = 1
 		},
 	}
 	for _, tt := range tests {
@@ -731,12 +731,11 @@ func TestGetItemsPerPage(t *testing.T) {
 			if got < 1 {
 				t.Errorf("getItemsPerPage() = %d, should be at least 1", got)
 			}
-			// Verify calculation (includes -2 for fleet group headers)
+			// Verify calculation (no sessions in test → fleetGroupCount=0 → no header subtraction)
 			availableLines := tt.height - 8
 			if tt.searching {
 				availableLines--
 			}
-			availableLines -= 2 // fleet group headers reserve
 			availableLines = max(availableLines, 4)
 			expected := availableLines / 4
 			expected = max(expected, 1)
@@ -767,28 +766,28 @@ func TestGetTotalPages(t *testing.T) {
 			name:        "fewer sessions than page size",
 			numSessions: 3,
 			height:      40,
-			// itemsPerPage = (40-8-2)/4 = 30/4 = 7, totalPages = ceil(3/7) = 1
+			// itemsPerPage = (40-8)/4 = 32/4 = 8, totalPages = ceil(3/8) = 1
 			wantPages: 1,
 		},
 		{
 			name:        "exactly one page",
-			numSessions: 7,
+			numSessions: 8,
 			height:      40,
-			// itemsPerPage = 7, totalPages = ceil(7/7) = 1
+			// itemsPerPage = 8, totalPages = ceil(8/8) = 1
 			wantPages: 1,
 		},
 		{
 			name:        "two pages",
-			numSessions: 8,
+			numSessions: 9,
 			height:      40,
-			// itemsPerPage = 7, totalPages = ceil(8/7) = 2
+			// itemsPerPage = 8, totalPages = ceil(9/8) = 2
 			wantPages: 2,
 		},
 		{
 			name:        "many sessions short terminal",
 			numSessions: 10,
 			height:      12,
-			// itemsPerPage = max((12-8-2),4)/4 = max(2,4)/4 = 4/4 = 1, totalPages = ceil(10/1) = 10
+			// itemsPerPage = max((12-8),4)/4 = 4/4 = 1, totalPages = ceil(10/1) = 10
 			wantPages: 10,
 		},
 	}
@@ -822,18 +821,18 @@ func TestGetPageSessions(t *testing.T) {
 	t.Run("first page", func(t *testing.T) {
 		m := Model{
 			sessions:    sessions,
-			height:      40, // itemsPerPage = (40-8-2)/4 = 7
+			height:      40, // itemsPerPage = (40-8)/4 = 8
 			currentPage: 0,
 		}
 		got := m.getPageSessions()
-		if len(got) != 7 {
-			t.Fatalf("getPageSessions() page 0 len = %d, want 7", len(got))
+		if len(got) != 8 {
+			t.Fatalf("getPageSessions() page 0 len = %d, want 8", len(got))
 		}
 		if got[0].Name != "s0" {
 			t.Errorf("first item Name = %q, want %q", got[0].Name, "s0")
 		}
-		if got[6].Name != "s6" {
-			t.Errorf("last item Name = %q, want %q", got[6].Name, "s6")
+		if got[7].Name != "s7" {
+			t.Errorf("last item Name = %q, want %q", got[7].Name, "s7")
 		}
 	})
 
@@ -844,14 +843,14 @@ func TestGetPageSessions(t *testing.T) {
 			currentPage: 1,
 		}
 		got := m.getPageSessions()
-		if len(got) != 3 {
-			t.Fatalf("getPageSessions() page 1 len = %d, want 3", len(got))
+		if len(got) != 2 {
+			t.Fatalf("getPageSessions() page 1 len = %d, want 2", len(got))
 		}
-		if got[0].Name != "s7" {
-			t.Errorf("first item Name = %q, want %q", got[0].Name, "s7")
+		if got[0].Name != "s8" {
+			t.Errorf("first item Name = %q, want %q", got[0].Name, "s8")
 		}
-		if got[2].Name != "s9" {
-			t.Errorf("last item Name = %q, want %q", got[2].Name, "s9")
+		if got[1].Name != "s9" {
+			t.Errorf("last item Name = %q, want %q", got[1].Name, "s9")
 		}
 	})
 
@@ -862,8 +861,8 @@ func TestGetPageSessions(t *testing.T) {
 			currentPage: 99,
 		}
 		got := m.getPageSessions()
-		if len(got) != 7 {
-			t.Fatalf("getPageSessions() beyond range len = %d, want 7", len(got))
+		if len(got) != 8 {
+			t.Fatalf("getPageSessions() beyond range len = %d, want 8", len(got))
 		}
 		if got[0].Name != "s0" {
 			t.Errorf("first item Name = %q, want %q", got[0].Name, "s0")

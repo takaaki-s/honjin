@@ -237,13 +237,25 @@ func (m *Model) getItemsPerPage() int {
 	if m.searching {
 		availableLines-- // search bar takes 1 line
 	}
-	// Reserve space for fleet group headers (1 line each, estimate max 2 groups per page)
-	availableLines -= 2
+	// Reserve space for fleet group headers when multiple fleets are present.
+	// Each fleet group gets a 1-line header; single-fleet lists show no headers.
+	if n := m.fleetGroupCount(); n > 1 {
+		availableLines -= n
+	}
 	availableLines = max(availableLines, 4)
 	// Each session takes ~4 lines (name + status + meta + time)
 	items := availableLines / 4
 	items = max(items, 1)
 	return items
+}
+
+// fleetGroupCount returns the number of distinct fleet groups in m.sessions.
+func (m *Model) fleetGroupCount() int {
+	seen := make(map[string]bool)
+	for _, s := range m.sessions {
+		seen[getFleetName(s)] = true
+	}
+	return len(seen)
 }
 
 // getTotalPages calculates the total number of pages
@@ -1505,10 +1517,7 @@ func renderFleetHeader(name string, width int) string {
 
 	// ── fleet-name ──────
 	leftDash := "── "
-	rightDashCount := width - len(leftDash) - labelWidth
-	if rightDashCount < 1 {
-		rightDashCount = 1
-	}
+	rightDashCount := max(width-lipgloss.Width(leftDash)-labelWidth, 1)
 	rightDash := strings.Repeat("─", rightDashCount)
 
 	headerStyle := lipgloss.NewStyle().Foreground(secondaryColor)
