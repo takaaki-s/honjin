@@ -1160,7 +1160,7 @@ func TestReconnectDeadTunnels_SkipsDockerHost(t *testing.T) {
 	server.reconnectDeadTunnels()
 }
 
-func TestReconnectDeadTunnels_SkipsAliveSSHHost(t *testing.T) {
+func TestReconnectDeadTunnels_DeadSSHHost(t *testing.T) {
 	server, _ := setupTestServer(t)
 
 	mock := &mockSlaveClient{running: true}
@@ -1168,12 +1168,21 @@ func TestReconnectDeadTunnels_SkipsAliveSSHHost(t *testing.T) {
 	registry.SetClient("ec2", mock)
 	server.hostRegistry = registry
 
-	// tunnelMgr has no tunnel for "ec2" so IsAlive returns false —
-	// but we confirm reconnectDeadTunnels doesn't panic and completes cleanly.
-	// (The actual SSH attempt would fail in CI; the goroutine logs the error.)
+	// tunnelMgr has no tunnel for "ec2" so IsAlive returns false.
+	// reconnectDeadTunnels should set the reconnecting flag and spawn a goroutine.
+	// The goroutine will fail (no SSH available in CI) and clear the flag.
 	server.reconnectDeadTunnels()
-	// Give the spawned goroutine a moment to start without blocking.
-	time.Sleep(10 * time.Millisecond)
+
+	// Verify the in-progress guard is set immediately after spawning.
+	server.reconnectingMu.Lock()
+	inProgress := server.reconnecting["ec2"]
+	server.reconnectingMu.Unlock()
+	if !inProgress {
+		t.Error("reconnecting[ec2] should be true while goroutine is running")
+	}
+
+	// Second call must be a no-op while reconnect is in progress.
+	server.reconnectDeadTunnels()
 }
 
 func TestWatchRemoteConnections_StopsOnClose(t *testing.T) {

@@ -38,10 +38,12 @@ type Server struct {
 	configMgr    *config.Manager
 	stateMgr     *config.StateManager
 	listener     net.Listener
-	createMu     sync.Mutex      // Mutual exclusion for session creation
-	hostRegistry *host.Registry  // Multi-host management
-	tunnelMgr    *tunnel.Manager // SSH tunnel management
-	stopPoll     chan struct{}   // Signal to stop remote notification polling
+	createMu       sync.Mutex      // Mutual exclusion for session creation
+	hostRegistry   *host.Registry  // Multi-host management
+	tunnelMgr      *tunnel.Manager // SSH tunnel management
+	stopPoll       chan struct{}    // Signal to stop background goroutines; initialized once in initRemoteSlaves, never reassigned
+	reconnectingMu sync.Mutex      // Protects reconnecting map
+	reconnecting   map[string]bool // Tracks hosts with a reconnect goroutine in progress
 }
 
 // Message types
@@ -91,11 +93,12 @@ func NewServer(socketPath, dataDir, configDir, hostID string) (*Server, error) {
 	}
 
 	s := &Server{
-		socketPath: socketPath,
-		hostID:     hostID,
-		manager:    mgr,
-		configMgr:  configMgr,
-		stateMgr:   stateMgr,
+		socketPath:   socketPath,
+		hostID:       hostID,
+		manager:      mgr,
+		configMgr:    configMgr,
+		stateMgr:     stateMgr,
+		reconnecting: make(map[string]bool),
 	}
 
 	// Initialize multi-host support (always create registry for peer registration)
@@ -607,7 +610,8 @@ func (s *Server) initRemoteSlaves() {
 
 // connectRemoteSlave runs the full 3-step connection sequence for one remote host:
 // start slave daemon, open tunnel, register client.
-// Safe to call when already connected (tunnelMgr.Open handles the alive check).
+// Safe to call when already connected: StartSlave is idempotent, tunnelMgr.Open
+// returns the existing socket if the tunnel is still alive.
 func (s *Server) connectRemoteSlave(h *host.Host) error {
 	peerSocketPath := filepath.Join(tunnel.PeerSocketDir, s.hostID, "daemon.sock")
 	bootstrapOpts := host.BootstrapOptions{
@@ -647,16 +651,30 @@ func (s *Server) watchRemoteConnections() {
 
 // reconnectDeadTunnels checks all configured SSH remote hosts and reconnects
 // any whose tunnel is no longer alive. Docker hosts are skipped (no process to restart).
+// At most one reconnect goroutine runs per host at a time.
 func (s *Server) reconnectDeadTunnels() {
 	for _, h := range s.hostRegistry.Remotes() {
-		if h.Config.Type != "ssh" {
+		if h.Type != "ssh" {
 			continue
 		}
 		if s.tunnelMgr.IsAlive(h.ID) {
 			continue
 		}
+		s.reconnectingMu.Lock()
+		if s.reconnecting[h.ID] {
+			s.reconnectingMu.Unlock()
+			continue
+		}
+		s.reconnecting[h.ID] = true
+		s.reconnectingMu.Unlock()
+
 		debugLog("[REMOTE] Tunnel to %s is dead, attempting reconnect", h.ID)
 		go func(rh *host.Host) {
+			defer func() {
+				s.reconnectingMu.Lock()
+				delete(s.reconnecting, rh.ID)
+				s.reconnectingMu.Unlock()
+			}()
 			if err := s.connectRemoteSlave(rh); err != nil {
 				debugLog("[REMOTE] Reconnect to %s failed: %v", rh.ID, err)
 				return
