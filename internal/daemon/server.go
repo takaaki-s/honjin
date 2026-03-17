@@ -32,16 +32,16 @@ const remoteReconnectInterval = 30 * time.Second
 
 // Server is the daemon server
 type Server struct {
-	socketPath   string
-	hostID       string // This daemon's host ID (e.g., "mac", "ec2"; default "local")
-	manager      *session.Manager
-	configMgr    *config.Manager
-	stateMgr     *config.StateManager
-	listener     net.Listener
+	socketPath     string
+	hostID         string // This daemon's host ID (e.g., "mac", "ec2"; default "local")
+	manager        *session.Manager
+	configMgr      *config.Manager
+	stateMgr       *config.StateManager
+	listener       net.Listener
 	createMu       sync.Mutex      // Mutual exclusion for session creation
 	hostRegistry   *host.Registry  // Multi-host management
 	tunnelMgr      *tunnel.Manager // SSH tunnel management
-	stopPoll       chan struct{}    // Signal to stop background goroutines; initialized once in initRemoteSlaves, never reassigned
+	stopPoll       chan struct{}   // Signal to stop background goroutines; initialized once in initRemoteSlaves, never reassigned
 	reconnectingMu sync.Mutex      // Protects reconnecting map
 	reconnecting   map[string]bool // Tracks hosts with a reconnect goroutine in progress
 }
@@ -154,7 +154,7 @@ func (s *Server) Start() error {
 
 // Stop stops the daemon server
 func (s *Server) Stop() {
-	// Stop remote notification polling
+	// Stop background goroutines (remote notifications and connection watcher)
 	if s.stopPoll != nil {
 		close(s.stopPoll)
 	}
@@ -610,8 +610,8 @@ func (s *Server) initRemoteSlaves() {
 
 // connectRemoteSlave runs the full 3-step connection sequence for one remote host:
 // start slave daemon, open tunnel, register client.
-// Safe to call when already connected: StartSlave is idempotent, tunnelMgr.Open
-// returns the existing socket if the tunnel is still alive.
+// Called during initial setup and reconnect. StartSlave is idempotent;
+// tunnelMgr.Open returns the existing socket if the tunnel is still alive.
 func (s *Server) connectRemoteSlave(h *host.Host) error {
 	peerSocketPath := filepath.Join(tunnel.PeerSocketDir, s.hostID, "daemon.sock")
 	bootstrapOpts := host.BootstrapOptions{

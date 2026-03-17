@@ -1068,7 +1068,7 @@ func TestIntegration_ListWithHostID_VisitedPropagated(t *testing.T) {
 
 // visitedCaptureMock captures the visited argument for inspection in tests.
 type visitedCaptureMock struct {
-	captureList func([]string)
+	captureList  func([]string)
 	captureNotif func([]string)
 }
 
@@ -1181,8 +1181,15 @@ func TestReconnectDeadTunnels_DeadSSHHost(t *testing.T) {
 		t.Error("reconnecting[ec2] should be true while goroutine is running")
 	}
 
-	// Second call must be a no-op while reconnect is in progress.
+	// Second call must be a no-op while reconnect is in progress:
+	// reconnecting map should still have exactly one entry.
 	server.reconnectDeadTunnels()
+	server.reconnectingMu.Lock()
+	count := len(server.reconnecting)
+	server.reconnectingMu.Unlock()
+	if count != 1 {
+		t.Errorf("reconnecting map should have 1 entry after no-op call, got %d", count)
+	}
 }
 
 func TestWatchRemoteConnections_StopsOnClose(t *testing.T) {
