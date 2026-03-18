@@ -828,6 +828,17 @@ func (s *Server) handleDirHistory(data json.RawMessage) Response {
 		req.MaxEntries = 5
 	}
 
+	// If request is for a remote host, forward to the slave daemon.
+	// The slave stores its history as HostID="local", so clear HostID before forwarding.
+	if req.HostID != "local" {
+		forwardReq := struct {
+			HostID     string `json:"host_id"`
+			MaxEntries int    `json:"max_entries"`
+		}{HostID: "local", MaxEntries: req.MaxEntries}
+		forwardData, _ := json.Marshal(forwardReq)
+		return s.forwardToHost(req.HostID, Request{Action: "dir-history", Data: forwardData})
+	}
+
 	entries := s.stateMgr.GetDirHistory(req.HostID, req.MaxEntries)
 	respData, _ := json.Marshal(entries)
 	return Response{Success: true, Data: respData}
