@@ -66,8 +66,8 @@ func TestManager_IsAlive_SSHProcess(t *testing.T) {
 		t.Fatalf("failed to start process: %v", err)
 	}
 	defer func() {
-		cmd.Process.Kill()
-		cmd.Wait()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 	}()
 
 	tunnel := &Tunnel{
@@ -85,8 +85,8 @@ func TestManager_IsAlive_SSHProcess(t *testing.T) {
 		t.Error("IsAlive should return true for a running process")
 	}
 
-	cmd.Process.Kill()
-	cmd.Wait()
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
 
 	if m.isAlive(tunnel) {
 		t.Error("isAlive should return false after process exits")
