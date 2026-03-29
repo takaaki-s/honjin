@@ -193,7 +193,7 @@ func TestE2E_DeleteWithTmuxCleanup(t *testing.T) {
 	}
 
 	// Delete
-	if err := client.Delete(info.ID, ""); err != nil {
+	if err := client.Delete(info.ID, "", false, false); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
@@ -254,7 +254,7 @@ func TestE2E_SessionDataPersistence(t *testing.T) {
 	}
 
 	// Delete should remove the file
-	if err := client.Delete(info.ID, ""); err != nil {
+	if err := client.Delete(info.ID, "", false, false); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if _, err := os.Stat(jsonPath); err == nil {
@@ -379,7 +379,7 @@ func TestE2E_MultipleSessionsTmux(t *testing.T) {
 
 	// Delete the rest
 	for _, i := range []int{0, 2} {
-		if err := client.Delete(sessions[i].id, ""); err != nil {
+		if err := client.Delete(sessions[i].id, "", false, false); err != nil {
 			t.Fatalf("Delete(%d): %v", i, err)
 		}
 	}
