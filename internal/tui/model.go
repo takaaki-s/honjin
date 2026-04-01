@@ -154,6 +154,9 @@ type Model struct {
 	deleteTargetIsWorktree bool   // Whether the session is in a git worktree
 	confirmWorktreeForce   bool   // Whether force-delete worktree confirmation is active
 
+	// Async delete tracking
+	deletingIDs map[string]bool // Session IDs currently being deleted
+
 	// Kill confirmation
 	confirmKill      bool   // Whether kill confirmation is active
 	killTargetID     string // Session ID to kill
@@ -215,6 +218,7 @@ func NewModel(client *daemon.Client) Model {
 		focused:     true,
 		configMgr:   configMgr,
 		searchInput: si,
+		deletingIDs: make(map[string]bool),
 	}
 }
 
@@ -339,6 +343,10 @@ func (m *Model) applySearchFilter() {
 type sessionsMsg []session.Info
 type errMsg error
 type tickMsg time.Time
+type deleteErrMsg struct {
+	sessionID string
+	err       error
+}
 type worktreeDirtyMsg struct {
 	sessionID string
 	hostID    string
@@ -575,6 +583,9 @@ func (m Model) handleAttach() (tea.Model, tea.Cmd) {
 		m.err = fmt.Errorf("cannot attach to creating session")
 		return m, nil
 	}
+	if m.deletingIDs[sess.ID] {
+		return m, nil
+	}
 
 	if m.tmuxClient != nil {
 		needsStart := sess.Status == session.StatusStopped
@@ -664,15 +675,14 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.confirmWorktreeForce {
 				switch msg.String() {
 				case "y", "Y":
-					m.processingMsg = "Deleting with worktree..."
-					m.needsReswitch = true
 					deleteID := m.deleteTargetID
 					deleteHostID := m.deleteTargetHostID
+					m.deletingIDs[deleteID] = true
 					m.resetDeleteState()
 					client := m.client
 					return m, func() tea.Msg {
 						if err := client.Delete(deleteID, deleteHostID, true, true); err != nil {
-							return errMsg(fmt.Errorf("delete failed: %w", err))
+							return deleteErrMsg{sessionID: deleteID, err: fmt.Errorf("delete failed: %w", err)}
 						}
 						sessions, err := client.List()
 						if err != nil {
@@ -682,15 +692,14 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				case "n", "N", "esc":
 					// Fall back: delete session only
-					m.processingMsg = "Deleting..."
-					m.needsReswitch = true
 					deleteID := m.deleteTargetID
 					deleteHostID := m.deleteTargetHostID
+					m.deletingIDs[deleteID] = true
 					m.resetDeleteState()
 					client := m.client
 					return m, func() tea.Msg {
 						if err := client.Delete(deleteID, deleteHostID, false, false); err != nil {
-							return errMsg(fmt.Errorf("delete failed: %w", err))
+							return deleteErrMsg{sessionID: deleteID, err: fmt.Errorf("delete failed: %w", err)}
 						}
 						sessions, err := client.List()
 						if err != nil {
@@ -705,15 +714,14 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Primary delete confirmation
 			switch msg.String() {
 			case "y", "Y", "enter":
-				m.processingMsg = "Deleting..."
-				m.needsReswitch = true
 				deleteID := m.deleteTargetID
 				deleteHostID := m.deleteTargetHostID
+				m.deletingIDs[deleteID] = true
 				m.resetDeleteState()
 				client := m.client
 				return m, func() tea.Msg {
 					if err := client.Delete(deleteID, deleteHostID, false, false); err != nil {
-						return errMsg(fmt.Errorf("delete failed: %w", err))
+						return deleteErrMsg{sessionID: deleteID, err: fmt.Errorf("delete failed: %w", err)}
 					}
 					sessions, err := client.List()
 					if err != nil {
@@ -725,11 +733,10 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !m.deleteTargetIsWorktree {
 					return m, nil // ignore if not a worktree
 				}
-				m.processingMsg = "Deleting with worktree..."
-				m.needsReswitch = true
 				deleteID := m.deleteTargetID
 				deleteHostID := m.deleteTargetHostID
 				deleteName := m.deleteTargetName
+				m.deletingIDs[deleteID] = true
 				m.resetDeleteState()
 				client := m.client
 				return m, func() tea.Msg {
@@ -738,7 +745,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if errors.Is(err, session.ErrWorktreeDirty) {
 							return worktreeDirtyMsg{sessionID: deleteID, hostID: deleteHostID, name: deleteName}
 						}
-						return errMsg(fmt.Errorf("delete failed: %w", err))
+						return deleteErrMsg{sessionID: deleteID, err: fmt.Errorf("delete failed: %w", err)}
 					}
 					sessions, err := client.List()
 					if err != nil {
@@ -803,6 +810,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "up":
 				if m.cursor > 0 {
 					m.cursor--
+					m.skipDeletingSessions(-1)
 				}
 				m.switchSeq++
 				return m, cursorSettledCmd(m.switchSeq)
@@ -811,6 +819,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 				pageSessions := m.getPageSessions()
 				if m.cursor < len(pageSessions)-1 {
 					m.cursor++
+					m.skipDeletingSessions(1)
 				}
 				m.switchSeq++
 				return m, cursorSettledCmd(m.switchSeq)
@@ -855,6 +864,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Up):
 			if m.cursor > 0 {
 				m.cursor--
+				m.skipDeletingSessions(-1)
 			}
 			m.switchSeq++
 			return m, cursorSettledCmd(m.switchSeq)
@@ -863,6 +873,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			pageSessions := m.getPageSessions()
 			if m.cursor < len(pageSessions)-1 {
 				m.cursor++
+				m.skipDeletingSessions(1)
 			}
 			m.switchSeq++
 			return m, cursorSettledCmd(m.switchSeq)
@@ -897,6 +908,9 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			pageSessions := m.getPageSessions()
 			if len(pageSessions) > 0 && m.cursor < len(pageSessions) {
 				sess := pageSessions[m.cursor]
+				if m.deletingIDs[sess.ID] {
+					return m, nil // ignore deleting session
+				}
 				// Enter confirmation mode
 				m.confirmKill = true
 				m.killTargetID = sess.ID
@@ -909,6 +923,9 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			pageSessions := m.getPageSessions()
 			if len(pageSessions) > 0 && m.cursor < len(pageSessions) {
 				sess := pageSessions[m.cursor]
+				if m.deletingIDs[sess.ID] {
+					return m, nil // ignore deleting session
+				}
 				// Enter confirmation mode
 				m.confirmDelete = true
 				m.deleteTargetID = sess.ID
@@ -952,6 +969,9 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			pageSessions := m.getPageSessions()
 			if len(pageSessions) > 0 && m.cursor < len(pageSessions) {
 				sess := pageSessions[m.cursor]
+				if m.deletingIDs[sess.ID] {
+					return m, nil
+				}
 				go m.openVSCode(&sess)
 			}
 			return m, nil
@@ -976,6 +996,21 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-apply search filter if active
 		if m.searching {
 			m.applySearchFilter()
+		}
+
+		// Check if any deleting sessions have been removed (deletion completed)
+		deleteCompleted := false
+		if len(m.deletingIDs) > 0 {
+			sessionIDs := make(map[string]bool, len(m.sessions))
+			for _, s := range m.sessions {
+				sessionIDs[s.ID] = true
+			}
+			for id := range m.deletingIDs {
+				if !sessionIDs[id] {
+					delete(m.deletingIDs, id)
+					deleteCompleted = true
+				}
+			}
 		}
 
 		// Focus on newly created session + switch right pane
@@ -1003,7 +1038,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = len(displaySessions) - 1
 		}
 		// Reconnect to session at cursor after delete/kill
-		if m.needsReswitch {
+		if m.needsReswitch || deleteCompleted {
 			m.needsReswitch = false
 			m.currentSessionID = "" // Force reset
 			if m.displayLocalAttach {
@@ -1012,7 +1047,10 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			pageSessions := m.getPageSessions()
 			if len(pageSessions) > 0 && m.cursor < len(pageSessions) {
-				m.switchToSession(pageSessions[m.cursor].ID)
+				sess := pageSessions[m.cursor]
+				if !m.deletingIDs[sess.ID] {
+					m.switchToSession(sess.ID)
+				}
 			} else {
 				m.respawnPlaceholder()
 			}
@@ -1068,11 +1106,14 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 		pageSessions := m.getPageSessions()
 		if len(pageSessions) > 0 && m.cursor < len(pageSessions) {
 			sess := pageSessions[m.cursor]
-			m.switchToSession(sess.ID)
+			if !m.deletingIDs[sess.ID] {
+				m.switchToSession(sess.ID)
+			}
 		}
 		return m, nil
 
 	case worktreeDirtyMsg:
+		delete(m.deletingIDs, msg.sessionID)
 		m.processingMsg = ""
 		m.confirmDelete = true
 		m.confirmWorktreeForce = true
@@ -1080,6 +1121,10 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.deleteTargetHostID = msg.hostID
 		m.deleteTargetName = msg.name
 		m.deleteTargetIsWorktree = true
+
+	case deleteErrMsg:
+		delete(m.deletingIDs, msg.sessionID)
+		m.err = msg.err
 
 	case errMsg:
 		m.processingMsg = ""
@@ -1139,6 +1184,34 @@ func (m *Model) resetDeleteState() {
 	m.deleteTargetName = ""
 	m.deleteTargetHostID = ""
 	m.deleteTargetIsWorktree = false
+}
+
+// skipDeletingSessions adjusts cursor to skip over sessions being deleted.
+// dir: -1 for up, +1 for down.
+func (m *Model) skipDeletingSessions(dir int) {
+	if len(m.deletingIDs) == 0 {
+		return
+	}
+	pageSessions := m.getPageSessions()
+	for m.cursor >= 0 && m.cursor < len(pageSessions) && m.deletingIDs[pageSessions[m.cursor].ID] {
+		m.cursor += dir
+	}
+	// Clamp
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	if m.cursor >= len(pageSessions) {
+		m.cursor = len(pageSessions) - 1
+	}
+	// Fallback: if still on a deleting session, scan the opposite direction
+	if m.cursor >= 0 && m.cursor < len(pageSessions) && m.deletingIDs[pageSessions[m.cursor].ID] {
+		for i := m.cursor - dir; i >= 0 && i < len(pageSessions); i -= dir {
+			if !m.deletingIDs[pageSessions[i].ID] {
+				m.cursor = i
+				return
+			}
+		}
+	}
 }
 
 // renderDeleteConfirm renders a delete confirmation dialog as a box overlay.
@@ -1310,6 +1383,23 @@ func (m Model) renderHelpLine() string {
 //
 //	details...
 func (m Model) renderSession(sess session.Info, selected bool, width int) string {
+	// Deleting sessions: dim rendering, not selectable
+	if m.deletingIDs[sess.ID] {
+		var b strings.Builder
+		name := truncateString(sess.Name, width-2)
+		b.WriteString("  ")
+		b.WriteString(deletingStyle.Render(name))
+		b.WriteString("\n")
+		b.WriteString("  ├─ ")
+		b.WriteString(deletingStyle.Render("⟳ deleting..."))
+		b.WriteString("\n")
+		b.WriteString("  ├─\n")
+		b.WriteString("  └─ ")
+		b.WriteString(deletingStyle.Render(timeAgo(sess.LastActiveAt)))
+		b.WriteString("\n")
+		return b.String()
+	}
+
 	var b strings.Builder
 
 	statusIcon, statusLabel, statusStyle := getStatusDisplay(sess.Status)

@@ -57,6 +57,9 @@ var (
 	stoppedStyle = lipgloss.NewStyle().
 			Foreground(dimColor)
 
+	deletingStyle = lipgloss.NewStyle().
+			Foreground(secondaryColor)
+
 	// Box border style
 	boxBorderColor = primaryColor
 )
