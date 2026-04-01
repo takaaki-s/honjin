@@ -1119,3 +1119,107 @@ func TestGroupSessionsByFleet(t *testing.T) {
 		}
 	})
 }
+
+// --- skipDeletingSessions ---
+
+func TestSkipDeletingSessions(t *testing.T) {
+	makeSessions := func(ids ...string) []session.Info {
+		var ss []session.Info
+		for _, id := range ids {
+			ss = append(ss, session.Info{ID: id, Name: id})
+		}
+		return ss
+	}
+
+	t.Run("no deleting sessions", func(t *testing.T) {
+		m := Model{
+			sessions:    makeSessions("a", "b", "c"),
+			cursor:      1,
+			deletingIDs: make(map[string]bool),
+			height:      100,
+		}
+		m.skipDeletingSessions(1)
+		if m.cursor != 1 {
+			t.Errorf("expected cursor 1, got %d", m.cursor)
+		}
+	})
+
+	t.Run("skip down over deleting session", func(t *testing.T) {
+		m := Model{
+			sessions:    makeSessions("a", "b", "c"),
+			cursor:      1,
+			deletingIDs: map[string]bool{"b": true},
+			height:      100,
+		}
+		m.skipDeletingSessions(1)
+		if m.cursor != 2 {
+			t.Errorf("expected cursor 2, got %d", m.cursor)
+		}
+	})
+
+	t.Run("skip up over deleting session", func(t *testing.T) {
+		m := Model{
+			sessions:    makeSessions("a", "b", "c"),
+			cursor:      1,
+			deletingIDs: map[string]bool{"b": true},
+			height:      100,
+		}
+		m.skipDeletingSessions(-1)
+		if m.cursor != 0 {
+			t.Errorf("expected cursor 0, got %d", m.cursor)
+		}
+	})
+
+	t.Run("clamp at end and fallback to opposite direction", func(t *testing.T) {
+		m := Model{
+			sessions:    makeSessions("a", "b", "c"),
+			cursor:      2,
+			deletingIDs: map[string]bool{"c": true},
+			height:      100,
+		}
+		m.skipDeletingSessions(1) // going down, hits end, clamp, fallback up
+		if m.cursor != 1 {
+			t.Errorf("expected cursor 1, got %d", m.cursor)
+		}
+	})
+
+	t.Run("clamp at start and fallback to opposite direction", func(t *testing.T) {
+		m := Model{
+			sessions:    makeSessions("a", "b", "c"),
+			cursor:      0,
+			deletingIDs: map[string]bool{"a": true},
+			height:      100,
+		}
+		m.skipDeletingSessions(-1) // going up, hits start, clamp, fallback down
+		if m.cursor != 1 {
+			t.Errorf("expected cursor 1, got %d", m.cursor)
+		}
+	})
+
+	t.Run("all sessions deleting stays on cursor 0", func(t *testing.T) {
+		m := Model{
+			sessions:    makeSessions("a", "b"),
+			cursor:      0,
+			deletingIDs: map[string]bool{"a": true, "b": true},
+			height:      100,
+		}
+		m.skipDeletingSessions(1)
+		// All deleting: cursor stays at clamped position (transient state)
+		if m.cursor < 0 || m.cursor >= 2 {
+			t.Errorf("expected cursor in range [0,1], got %d", m.cursor)
+		}
+	})
+
+	t.Run("multiple deleting sessions skip all", func(t *testing.T) {
+		m := Model{
+			sessions:    makeSessions("a", "b", "c", "d"),
+			cursor:      1,
+			deletingIDs: map[string]bool{"b": true, "c": true},
+			height:      100,
+		}
+		m.skipDeletingSessions(1)
+		if m.cursor != 3 {
+			t.Errorf("expected cursor 3, got %d", m.cursor)
+		}
+	})
+}
