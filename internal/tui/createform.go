@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/takaaki-s/claude-code-valet/internal/config"
 	"github.com/takaaki-s/claude-code-valet/internal/daemon"
+	"github.com/takaaki-s/claude-code-valet/internal/paths"
 	"github.com/takaaki-s/claude-code-valet/internal/session"
 	"github.com/takaaki-s/claude-code-valet/internal/tmux"
 )
@@ -71,8 +72,7 @@ type createFormCompleteMsg struct {
 // NewCreateFormModel creates a new CreateFormModel with all inputs initialized.
 func NewCreateFormModel(socketPath string) CreateFormModel {
 	home, _ := os.UserHomeDir()
-	configDir := filepath.Join(home, ".ccvalet")
-	configMgr, _ := config.NewManager(configDir)
+	configMgr, _ := config.NewManager(paths.Config())
 
 	client := daemon.NewClient(socketPath)
 

@@ -39,7 +39,7 @@ type Manager struct {
 	configMgr  *config.Manager
 	tmuxClient tmux.Runner // tmux client for session management
 	mu         sync.RWMutex
-	configDir  string
+	stateDir   string
 }
 
 // SetTmuxClient sets the tmux client for tmux-based session management.
@@ -143,9 +143,12 @@ func (m *Manager) configureInnerTmux() {
 	debugLog("[TMUX] Inner tmux server configured (pane-died hook)")
 }
 
-// NewManager creates a new session manager
-func NewManager(dataDir, configDir string, configMgr *config.Manager) (*Manager, error) {
-	store, err := NewStore(dataDir)
+// NewManager creates a new session manager.
+//
+// sessionsDir is where per-session JSON files live; stateDir is where
+// generated artifacts such as hooks-settings.json are written.
+func NewManager(sessionsDir, stateDir string, configMgr *config.Manager) (*Manager, error) {
+	store, err := NewStore(sessionsDir)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +158,7 @@ func NewManager(dataDir, configDir string, configMgr *config.Manager) (*Manager,
 		store:     store,
 		notifier:  notify.NewNotifier(),
 		configMgr: configMgr,
-		configDir: configDir,
+		stateDir:  stateDir,
 	}
 
 	// Load existing sessions
@@ -529,7 +532,7 @@ func (m *Manager) startSessionTmux(session *Session) error {
 	claudeCmd := "claude"
 	execPath, err := os.Executable()
 	if err == nil {
-		if hooksPath, err := ensureHooksSettingsFile(m.configDir, execPath); err == nil {
+		if hooksPath, err := ensureHooksSettingsFile(m.stateDir, execPath); err == nil {
 			claudeCmd = fmt.Sprintf("claude --settings %s", hooksPath)
 		} else {
 			debugLog("[HOOKS] Warning: failed to generate hooks settings: %v", err)
@@ -1165,11 +1168,11 @@ type hooksSettings struct {
 	Hooks map[string][]hooksMatcher `json:"hooks"`
 }
 
-// ensureHooksSettingsFile generates ~/.ccvalet/hooks-settings.json with the
+// ensureHooksSettingsFile generates hooks-settings.json inside stateDir with the
 // ccvalet hook command for all required hook events. The file is written on
 // every call so that it stays up-to-date if the binary path changes.
 // Returns the absolute path to the generated file.
-func ensureHooksSettingsFile(dataDir, execPath string) (string, error) {
+func ensureHooksSettingsFile(stateDir, execPath string) (string, error) {
 	entry := hooksEntry{
 		Type:    "command",
 		Command: execPath + " hook",
@@ -1196,7 +1199,7 @@ func ensureHooksSettingsFile(dataDir, execPath string) (string, error) {
 		return "", fmt.Errorf("failed to marshal hooks settings: %w", err)
 	}
 
-	path := filepath.Join(dataDir, "hooks-settings.json")
+	path := filepath.Join(stateDir, "hooks-settings.json")
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return "", fmt.Errorf("failed to write hooks settings file: %w", err)
 	}

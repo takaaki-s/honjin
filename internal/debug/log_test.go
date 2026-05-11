@@ -7,6 +7,26 @@ import (
 	"testing"
 )
 
+// withStateHome forces internal/paths to resolve State() to a deterministic
+// directory by setting XDG_STATE_HOME for the duration of the test.
+func withStateHome(t *testing.T, dir string) string {
+	t.Helper()
+	orig, had := os.LookupEnv("XDG_STATE_HOME")
+	os.Setenv("XDG_STATE_HOME", dir)
+	t.Cleanup(func() {
+		if had {
+			os.Setenv("XDG_STATE_HOME", orig)
+		} else {
+			os.Unsetenv("XDG_STATE_HOME")
+		}
+	})
+	stateDir := filepath.Join(dir, "ccvalet")
+	if err := os.MkdirAll(stateDir, 0755); err != nil {
+		t.Fatalf("failed to create state dir: %v", err)
+	}
+	return stateDir
+}
+
 func TestNewLogger_Disabled(t *testing.T) {
 	// When CCVALET_DEBUG is not "1", the logger should be a no-op.
 	origDebug := os.Getenv("CCVALET_DEBUG")
@@ -18,23 +38,13 @@ func TestNewLogger_Disabled(t *testing.T) {
 	enabled = false
 	defer func() { enabled = origEnabled }()
 
-	dir := t.TempDir()
+	stateDir := withStateHome(t, t.TempDir())
 	filename := "test-disabled.log"
-
-	// Override HOME so NewLogger resolves to our temp dir
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", dir)
-	defer os.Setenv("HOME", origHome)
-
-	// Create .ccvalet directory
-	if err := os.MkdirAll(filepath.Join(dir, ".ccvalet"), 0755); err != nil {
-		t.Fatalf("failed to create .ccvalet dir: %v", err)
-	}
 
 	log := NewLogger(filename)
 	log("this message should not appear")
 
-	logPath := filepath.Join(dir, ".ccvalet", filename)
+	logPath := filepath.Join(stateDir, filename)
 	if _, err := os.Stat(logPath); err == nil {
 		t.Error("logger created a file even though debug is disabled")
 	}
@@ -45,19 +55,12 @@ func TestNewLogger_Enabled(t *testing.T) {
 	enabled = true
 	defer func() { enabled = origEnabled }()
 
-	dir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", dir)
-	defer os.Setenv("HOME", origHome)
-
-	if err := os.MkdirAll(filepath.Join(dir, ".ccvalet"), 0755); err != nil {
-		t.Fatalf("failed to create .ccvalet dir: %v", err)
-	}
+	stateDir := withStateHome(t, t.TempDir())
 
 	log := NewLogger("test-enabled.log")
 	log("hello %s %d", "world", 42)
 
-	logPath := filepath.Join(dir, ".ccvalet", "test-enabled.log")
+	logPath := filepath.Join(stateDir, "test-enabled.log")
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("failed to read log file: %v", err)

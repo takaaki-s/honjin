@@ -40,7 +40,7 @@ func buildEnvString(envMap map[string]string) string {
 }
 
 // shellEscape wraps a value in single quotes and escapes any embedded single quotes.
-// The escape sequence for a single quote within single quotes is: '\''
+// The escape sequence for a single quote within single quotes is: '\”
 // (end quote, escaped quote, start quote)
 func shellEscape(s string) string {
 	escaped := strings.ReplaceAll(s, "'", "'\\''")

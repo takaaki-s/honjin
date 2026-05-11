@@ -9,15 +9,11 @@ import (
 	"unicode"
 
 	"github.com/takaaki-s/claude-code-valet/internal/config"
+	"github.com/takaaki-s/claude-code-valet/internal/paths"
 )
 
-const (
-	// slaveStartTimeout is the timeout for slave startup commands
-	slaveStartTimeout = 30 * time.Second
-
-	// defaultRemoteSocketPath is the default daemon socket path on the remote side
-	defaultRemoteSocketPath = "~/.ccvalet/run/daemon.sock"
-)
+// slaveStartTimeout is the timeout for slave startup commands.
+const slaveStartTimeout = 30 * time.Second
 
 // BootstrapOptions configures optional peer information for the slave daemon
 type BootstrapOptions struct {
@@ -57,7 +53,7 @@ func validatePath(s string) error {
 func StartSlaveCommand(hostConfig config.HostConfig, opts ...BootstrapOptions) *exec.Cmd {
 	socketPath := hostConfig.SocketPath
 	if socketPath == "" {
-		socketPath = defaultRemoteSocketPath
+		socketPath = paths.RemoteDefaultSocket()
 	}
 
 	ccvaletBin := "ccvalet"

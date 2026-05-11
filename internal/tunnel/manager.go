@@ -12,15 +12,11 @@ import (
 	"time"
 
 	"github.com/takaaki-s/claude-code-valet/internal/config"
+	"github.com/takaaki-s/claude-code-valet/internal/paths"
 )
 
-const (
-	// DefaultRemoteSocketPath is the default daemon socket path on the remote side
-	DefaultRemoteSocketPath = ".ccvalet/run/daemon.sock"
-
-	// localSocketDir is the directory for tunnel local sockets
-	localSocketDir = "/tmp/ccvalet-tunnels"
-)
+// localSocketDir is the directory for tunnel local sockets.
+const localSocketDir = "/tmp/ccvalet-tunnels"
 
 // Tunnel represents a tunnel connection to a remote host
 type Tunnel struct {
@@ -98,7 +94,7 @@ func (m *Manager) OpenSSH(hostConfig config.HostConfig, opts ...TunnelOptions) (
 			os.Remove(localSocket)
 			return "", fmt.Errorf("failed to get remote home directory: %w", err)
 		}
-		remoteSocket = remoteHome + "/" + DefaultRemoteSocketPath
+		remoteSocket = remoteHome + "/" + paths.RemoteDefaultSocketRel()
 	}
 
 	// Build SSH command
@@ -132,11 +128,12 @@ func (m *Manager) OpenSSH(hostConfig config.HostConfig, opts ...TunnelOptions) (
 		)
 	}
 
-	agentSymlink := "~/.ccvalet/ssh-agent.sock"
+	remoteStateDir := "~/" + paths.RemoteStateDirRel()
+	agentSymlink := remoteStateDir + "/ssh-agent.sock"
 	remoteCmd := fmt.Sprintf(
-		"%smkdir -p ~/.ccvalet && test -n \"$SSH_AUTH_SOCK\" && ln -sf \"$SSH_AUTH_SOCK\" %s; "+
+		"%smkdir -p %s && test -n \"$SSH_AUTH_SOCK\" && ln -sf \"$SSH_AUTH_SOCK\" %s; "+
 			"while sleep 3600; do :; done",
-		reversePreamble, agentSymlink,
+		reversePreamble, remoteStateDir, agentSymlink,
 	)
 	args = append(args,
 		"-L", localSocket+":"+remoteSocket,
@@ -184,7 +181,7 @@ func (m *Manager) OpenDocker(hostConfig config.HostConfig) (string, error) {
 
 	// For Docker, the socket path is assumed to be directly accessible via volume mount.
 	// The local socket path is auto-calculated from host ID using the same convention as SSH.
-	// Example: docker run -v /tmp/ccvalet-tunnels/docker-dev:/root/.ccvalet/run container
+	// Example: docker run -v /tmp/ccvalet-tunnels/docker-dev:/root/.local/state/ccvalet container
 	//          -> accessible at /tmp/ccvalet-tunnels/docker-dev/daemon.sock
 	localSocket := filepath.Join(localSocketDir, hostConfig.ID, "daemon.sock")
 	_ = os.MkdirAll(filepath.Dir(localSocket), 0700)

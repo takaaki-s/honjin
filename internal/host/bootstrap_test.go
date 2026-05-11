@@ -110,7 +110,7 @@ func TestStartSlaveCommand(t *testing.T) {
 			"-o", "ControlMaster=no",
 			"-o", "ClearAllForwardings=yes",
 			"myhost",
-			"ccvalet daemon start --socket ~/.ccvalet/run/daemon.sock",
+			"ccvalet daemon start --socket ~/.local/state/ccvalet/daemon.sock",
 		}
 		if len(cmd.Args) != len(wantArgs) {
 			t.Fatalf("args length = %d, want %d\ngot:  %v\nwant: %v", len(cmd.Args), len(wantArgs), cmd.Args, wantArgs)
@@ -158,7 +158,7 @@ func TestStartSlaveCommand(t *testing.T) {
 			"-o", "ClearAllForwardings=yes",
 			"-p", "2222", "-i", "/path/to/key",
 			"myhost",
-			"ccvalet daemon start --socket ~/.ccvalet/run/daemon.sock",
+			"ccvalet daemon start --socket ~/.local/state/ccvalet/daemon.sock",
 		}
 		if len(cmd.Args) != len(wantArgs) {
 			t.Fatalf("args length = %d, want %d\ngot:  %v\nwant: %v", len(cmd.Args), len(wantArgs), cmd.Args, wantArgs)
@@ -182,7 +182,7 @@ func TestStartSlaveCommand(t *testing.T) {
 
 		wantArgs := []string{
 			"docker", "exec", "my-container", "sh", "-c",
-			"ccvalet daemon start --socket ~/.ccvalet/run/daemon.sock",
+			"ccvalet daemon start --socket ~/.local/state/ccvalet/daemon.sock",
 		}
 		if len(cmd.Args) != len(wantArgs) {
 			t.Fatalf("args length = %d, want %d\ngot:  %v\nwant: %v", len(cmd.Args), len(wantArgs), cmd.Args, wantArgs)
@@ -215,7 +215,7 @@ func TestStartSlaveCommand(t *testing.T) {
 			t.Fatal("expected non-nil command")
 		}
 		lastArg := cmd.Args[len(cmd.Args)-1]
-		want := "ccvalet daemon start --socket ~/.ccvalet/run/daemon.sock --peer-socket /tmp/ccvalet-peers/mac/daemon.sock --peer-id mac"
+		want := "ccvalet daemon start --socket ~/.local/state/ccvalet/daemon.sock --peer-socket /tmp/ccvalet-peers/mac/daemon.sock --peer-id mac"
 		if lastArg != want {
 			t.Errorf("remote command = %q, want %q", lastArg, want)
 		}
@@ -232,7 +232,7 @@ func TestStartSlaveCommand(t *testing.T) {
 			t.Fatal("expected non-nil command")
 		}
 		lastArg := cmd.Args[len(cmd.Args)-1]
-		want := "/home/user/.local/bin/ccvalet daemon start --socket ~/.ccvalet/run/daemon.sock"
+		want := "/home/user/.local/bin/ccvalet daemon start --socket ~/.local/state/ccvalet/daemon.sock"
 		if lastArg != want {
 			t.Errorf("remote command = %q, want %q", lastArg, want)
 		}
@@ -249,7 +249,7 @@ func TestStartSlaveCommand(t *testing.T) {
 			t.Fatal("expected non-nil command")
 		}
 		lastArg := cmd.Args[len(cmd.Args)-1]
-		want := "/usr/local/bin/ccvalet daemon start --socket ~/.ccvalet/run/daemon.sock"
+		want := "/usr/local/bin/ccvalet daemon start --socket ~/.local/state/ccvalet/daemon.sock"
 		if lastArg != want {
 			t.Errorf("remote command = %q, want %q", lastArg, want)
 		}
@@ -287,7 +287,7 @@ func TestValidatePath(t *testing.T) {
 		valid bool
 	}{
 		{"/tmp/ccvalet-peers/mac/daemon.sock", true},
-		{"~/.ccvalet/run/daemon.sock", true},
+		{"~/.local/state/ccvalet/daemon.sock", true},
 		{"/a/b/c", true},
 		{"", false},
 		{"/tmp/foo;rm -rf /", false},

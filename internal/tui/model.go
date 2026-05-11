@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/takaaki-s/claude-code-valet/internal/config"
 	"github.com/takaaki-s/claude-code-valet/internal/daemon"
 	"github.com/takaaki-s/claude-code-valet/internal/host"
+	"github.com/takaaki-s/claude-code-valet/internal/paths"
 	"github.com/takaaki-s/claude-code-valet/internal/session"
 	"github.com/takaaki-s/claude-code-valet/internal/tmux"
 )
@@ -193,9 +193,7 @@ type Model struct {
 // NewModel creates a new TUI model
 func NewModel(client *daemon.Client) Model {
 	// Initialize config manager
-	home, _ := os.UserHomeDir()
-	configDir := filepath.Join(home, ".ccvalet")
-	configMgr, _ := config.NewManager(configDir)
+	configMgr, _ := config.NewManager(paths.Config())
 
 	// Initialize keybindings
 	var keybindings config.KeybindingsConfig
