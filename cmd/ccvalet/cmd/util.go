@@ -1,12 +1,15 @@
 package cmd
 
 import (
-	"os"
-	"path/filepath"
+	"github.com/takaaki-s/claude-code-valet/internal/paths"
 )
 
-// getConfigDir returns the configuration directory path
+// getConfigDir returns the user configuration directory (XDG-compliant).
 func getConfigDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".ccvalet")
+	return paths.Config()
+}
+
+// getStateDir returns the persistent state directory (XDG-compliant).
+func getStateDir() string {
+	return paths.State()
 }

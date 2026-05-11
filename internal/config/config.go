@@ -59,7 +59,7 @@ type HostConfig struct {
 	Host        string   `mapstructure:"host,omitempty"`         // SSH target (e.g., "ec2-host")
 	SSHOpts     []string `mapstructure:"ssh_opts,omitempty"`     // Additional SSH options
 	Container   string   `mapstructure:"container,omitempty"`    // Docker container name/ID
-	SocketPath  string   `mapstructure:"socket_path,omitempty"`  // Remote socket path (default: ~/.ccvalet/run/daemon.sock)
+	SocketPath  string   `mapstructure:"socket_path,omitempty"`  // Remote socket path (default: ~/.local/state/ccvalet/daemon.sock)
 	CcvaletPath string   `mapstructure:"ccvalet_path,omitempty"` // Full path to ccvalet binary on remote (default: ccvalet)
 }
 

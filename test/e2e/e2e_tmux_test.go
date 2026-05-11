@@ -20,14 +20,15 @@ import (
 
 // --- helpers ---
 
-// setupE2EWithDataDir creates a daemon server using the provided data/config dirs.
+// setupE2EWithDataDir creates a daemon server using the provided sessions/config dirs.
+// The same configDir is reused as stateDir (acceptable for ephemeral test scratch).
 // Returns the client and server (server is needed for Stop in recovery tests).
-func setupE2EWithDataDir(t *testing.T, dataDir, configDir string) (*daemon.Client, *daemon.Server) {
+func setupE2EWithDataDir(t *testing.T, sessionsDir, configDir string) (*daemon.Client, *daemon.Server) {
 	t.Helper()
 
 	socketPath := filepath.Join(t.TempDir(), "e2e-tmux.sock")
 
-	server, err := daemon.NewServer(socketPath, dataDir, configDir, "local")
+	server, err := daemon.NewServer(socketPath, sessionsDir, configDir, configDir, "local")
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/takaaki-s/claude-code-valet/internal/daemon"
+	"github.com/takaaki-s/claude-code-valet/internal/paths"
 	"github.com/takaaki-s/claude-code-valet/internal/session"
 )
 
@@ -99,6 +100,5 @@ func renderNewSessionJSON(w io.Writer, info *session.Info) error {
 }
 
 func getDataDir() string {
-	home, _ := os.UserHomeDir()
-	return home + "/.ccvalet/sessions"
+	return paths.Sessions()
 }

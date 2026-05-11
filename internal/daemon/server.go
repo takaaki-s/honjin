@@ -62,19 +62,23 @@ type Response struct {
 	Error   string          `json:"error,omitempty"`
 }
 
-// NewServer creates a new daemon server
-func NewServer(socketPath, dataDir, configDir, hostID string) (*Server, error) {
+// NewServer creates a new daemon server.
+//
+// sessionsDir holds per-session JSON files; configDir holds config.yaml;
+// stateDir holds state.yaml plus generated artifacts (hooks-settings.json).
+// XDG-compliant defaults are resolved by the caller via internal/paths.
+func NewServer(socketPath, sessionsDir, configDir, stateDir, hostID string) (*Server, error) {
 	configMgr, err := config.NewManager(configDir)
 	if err != nil {
 		return nil, err
 	}
 
-	stateMgr, err := config.NewStateManager(configDir)
+	stateMgr, err := config.NewStateManager(stateDir)
 	if err != nil {
 		return nil, err
 	}
 
-	mgr, err := session.NewManager(dataDir, configDir, configMgr)
+	mgr, err := session.NewManager(sessionsDir, stateDir, configMgr)
 	if err != nil {
 		return nil, err
 	}
@@ -117,8 +121,9 @@ func (s *Server) Start() error {
 	// Remove existing socket
 	os.Remove(s.socketPath)
 
-	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(s.socketPath), 0755); err != nil {
+	// Ensure directory exists with user-only permissions (XDG_RUNTIME_DIR rules
+	// apply, and the TMPDIR fallback shares a multi-user space).
+	if err := os.MkdirAll(filepath.Dir(s.socketPath), 0700); err != nil {
 		return err
 	}
 

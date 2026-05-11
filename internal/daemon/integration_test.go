@@ -35,10 +35,11 @@ func setupTestServer(t *testing.T) (*Server, *Client) {
 
 	tmpDir := shortTempDir(t)
 	socketPath := filepath.Join(tmpDir, "t.sock")
-	dataDir := filepath.Join(tmpDir, "sessions")
+	sessionsDir := filepath.Join(tmpDir, "sessions")
 	configDir := filepath.Join(tmpDir, "config")
+	stateDir := filepath.Join(tmpDir, "state")
 
-	server, err := NewServer(socketPath, dataDir, configDir, "local")
+	server, err := NewServer(socketPath, sessionsDir, configDir, stateDir, "local")
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}

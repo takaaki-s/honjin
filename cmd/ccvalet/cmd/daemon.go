@@ -5,12 +5,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/takaaki-s/claude-code-valet/internal/config"
 	"github.com/takaaki-s/claude-code-valet/internal/daemon"
+	"github.com/takaaki-s/claude-code-valet/internal/paths"
 )
 
 type daemonStatusResult struct {
@@ -34,7 +34,7 @@ var daemonCmd = &cobra.Command{
 		}
 
 		hostID := resolveHostID()
-		server, err := daemon.NewServer(getSocketPath(), getDataDir(), getConfigDir(), hostID)
+		server, err := daemon.NewServer(getSocketPath(), getDataDir(), getConfigDir(), getStateDir(), hostID)
 		if err != nil {
 			return err
 		}
@@ -174,6 +174,5 @@ func getSocketPath() string {
 	if socketPathFlag != "" {
 		return socketPathFlag
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".ccvalet", "run", "daemon.sock")
+	return paths.Socket()
 }
