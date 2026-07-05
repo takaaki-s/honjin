@@ -286,6 +286,64 @@ keybindings:
                        # Supported keys: ctrl+^, ctrl+], ctrl+\, ctrl+g
 ```
 
+### Worktree placement
+
+By default, `jin session new --worktree` creates worktrees under `$XDG_STATE_HOME/honjin/worktrees/{name}` (typically `~/.local/state/honjin/worktrees/`). Override this with `worktree.base_dir` in `config.yaml`:
+
+```yaml
+worktree:
+  # Group worktrees per repository under a stable location
+  base_dir: "${HOME}/ghq/worktrees/{repo}/{name}"
+```
+
+Other common layouts:
+
+```yaml
+# Sibling directory next to each repo checkout
+worktree:
+  base_dir: "${HOME}/dev/worktrees/{name}"
+
+# Under a fixed root, ignoring repo name
+worktree:
+  base_dir: "/mnt/fast/worktrees/{name}"
+```
+
+Template variables:
+
+| Placeholder | Expands to |
+|-------------|------------|
+| `{name}` | Worktree name (e.g. `jin-abcd1234`, or the `--name` you passed) |
+| `{repo}` | Basename of the original repository |
+| `${VAR}` | Environment variable (`os.ExpandEnv` semantics) |
+
+The expanded path must be absolute. Unknown `{xxx}` placeholders are rejected at session creation.
+
+### Worktree branch naming
+
+Every worktree gets a companion branch. Two `worktree:` settings control how it is named:
+
+```yaml
+worktree:
+  branch_prefix: "topic/"   # Default: "jin/". Use "" to drop the prefix.
+  default_branch: "main"    # Fallback base branch. Default: "" (no fallback).
+```
+
+- **`branch_prefix`** — prepended to the auto-derived worktree name to form the branch name. The leading `jin-` on the worktree name is stripped first, so under the default `jin-abcd1234` becomes `jin/abcd1234` (not `jin/jin-abcd1234`). Ignored when you pass `--worktree-branch <name>` to `jin session new`, since that overrides the branch outright.
+- **`default_branch`** — used **only** when honjin cannot auto-detect the repository's default branch. Detection reads `refs/remotes/origin/HEAD`; local clones that never had it set (some tarballs, `git clone --no-checkout`, older clones) will hit the fallback. If detection fails and `default_branch` is empty, session creation errors with `cannot detect default branch`.
+
+### Worktree fetch behavior
+
+Before creating a worktree, honjin runs `git fetch origin <base-branch>` so the new worktree starts from an up-to-date base. `worktree.fetch_failure` decides what happens when that fetch fails (offline, auth error, transient network hiccup):
+
+```yaml
+worktree:
+  fetch_failure: warn     # Default. Continue with the locally cached origin/<base>.
+  # fetch_failure: strict # Abort session creation on any fetch error.
+```
+
+- **`warn`** — logs the failure (visible with `JIN_DEBUG=1`) and creates the worktree from whatever local `origin/<base>` was already there. Good for offline work; the trade-off is that the new worktree may branch off a stale tip.
+- **`strict`** — surfaces the fetch error and aborts session creation before `git worktree add` runs. Pick this when a stale base branch would be a real problem (release cuts, deploy branches, anything CI-tagged).
+
 ## TUI Keybindings
 
 ### Session list view
