@@ -382,7 +382,7 @@ jin worktree status   # Show the allow status of the current repository
 jin worktree list     # List all trusted repositories
 ```
 
-If the script exists but isn't trusted (or changed since it was trusted), the hook is skipped with a warning — the worktree is still created and Claude still starts normally.
+If the script exists but isn't trusted (or changed since it was trusted), the hook is skipped with a warning — the worktree is still created and Claude still starts normally. When creating from the TUI, the popup surfaces a three-way prompt (`a`: Allow, `s`: Skip and create anyway, `c`: Cancel) so you can decide without dropping to a shell.
 
 ### Skipping the hook
 
