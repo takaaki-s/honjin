@@ -500,6 +500,58 @@ func (r *Reader) LastToolResult(workDir, sessionID, toolName string, onlyErrors 
 	return nil, nil
 }
 
+// ReadAITitle returns the AI-generated session title Claude Code writes to
+// the transcript when it names the conversation from context (the same value
+// CC surfaces as "Session name" in `/status`). Each line of the JSONL is
+// checked for `{"type":"ai-title","aiTitle":"…"}` and the most recent
+// non-empty value wins — CC may re-title the session later in the
+// conversation, and callers should see the latest title, not the first.
+//
+// Returns ("", false) on any miss: empty sessionID, no transcript file yet
+// (silent), malformed lines (skipped), or no ai-title entry present. Never
+// returns an error — all failure modes are silent fallbacks by design so the
+// Layer C-name enhancer can call this on every hook without guard code.
+func (r *Reader) ReadAITitle(workDir, sessionID string) (string, bool) {
+	if sessionID == "" {
+		return "", false
+	}
+	path, err := r.findTranscriptPath(workDir, sessionID)
+	if err != nil {
+		return "", false
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer file.Close()
+
+	var latest string
+	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var probe struct {
+			Type    string `json:"type"`
+			AITitle string `json:"aiTitle"`
+		}
+		if err := json.Unmarshal(line, &probe); err != nil {
+			continue
+		}
+		if probe.Type != "ai-title" || probe.AITitle == "" {
+			continue
+		}
+		latest = probe.AITitle
+	}
+	if latest == "" {
+		return "", false
+	}
+	return latest, true
+}
+
 // readEntries reads the JSONL file and returns parsed Entry values, optionally
 // filtered by Timestamp > since.
 func readEntries(filePath, since string) ([]Entry, error) {

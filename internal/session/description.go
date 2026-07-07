@@ -140,14 +140,27 @@ const (
 	// DescriptionLayerBaseline is Layer A: the repo:branch label produced by
 	// GenerateBaselineDescription. Always present, never informative on its own.
 	DescriptionLayerBaseline DescriptionLayer = 0
-	// DescriptionLayerAgentName is Layer C-name: an agent-supplied session
-	// name (e.g. Claude Code's ~/.claude/sessions/<PID>.json "name" field),
-	// available as early as the SessionStart hook.
-	DescriptionLayerAgentName DescriptionLayer = 1
+	// DescriptionLayerAgentNameDerived is Layer C-name (weak): the agent
+	// wrote a session name but flagged it as externally supplied (Claude Code
+	// 2.x nameSource="derived", i.e. round-tripped from the tmux window name
+	// jindaiko itself handed the process). Slightly better than nothing —
+	// it at least matches CC's own /resume picker — but a genuinely
+	// conversation-derived name should still be allowed to overwrite it.
+	DescriptionLayerAgentNameDerived DescriptionLayer = 1
+	// DescriptionLayerAgentName is Layer C-name (strong): an agent-supplied
+	// session name whose source is NOT the "derived" hint round-trip
+	// (e.g. Claude Code has renamed the session from the conversation topic).
+	// Available as early as the SessionStart hook when the agent already had
+	// a strong name; otherwise arrives on a later hook once the agent
+	// re-classifies the name field.
+	DescriptionLayerAgentName DescriptionLayer = 2
 	// DescriptionLayerTranscript is Layer C-transcript: the first meaningful
 	// user prompt mined from the agent transcript, only available after the
-	// first user turn has been flushed to disk.
-	DescriptionLayerTranscript DescriptionLayer = 2
+	// first user turn has been flushed to disk. Not used by the Claude Code
+	// adapter (see internal/agent/claude/description.go — the CC enhancer
+	// stops at Layer C-name because CC produces its own topic-derived name).
+	// Reserved for future adapters that lack a native session-name field.
+	DescriptionLayerTranscript DescriptionLayer = 3
 )
 
 // DescriptionEnhancer produces an agent-specific "Layer C" description upgrade

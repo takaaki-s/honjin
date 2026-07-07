@@ -1003,3 +1003,118 @@ func TestReader_FindTranscriptPath(t *testing.T) {
 		t.Errorf("expected ErrNotExist for empty sessionID, got %v", err)
 	}
 }
+
+// writeRawJSONL writes each line verbatim to path (newline-terminated). Used
+// for ai-title tests because ai-title entries have a shape that transcriptEntry
+// cannot round-trip (no `message` field), so we can't encode via writeJSONL.
+func writeRawJSONL(t *testing.T, path string, lines []string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	for _, line := range lines {
+		if _, err := f.WriteString(line + "\n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestReader_ReadAITitle(t *testing.T) {
+	t.Run("no transcript file returns miss", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		r := &Reader{claudeDir: tmpDir}
+		if title, ok := r.ReadAITitle("/nowhere", "sess-missing"); ok || title != "" {
+			t.Fatalf("ReadAITitle = (%q, %v), want (\"\", false)", title, ok)
+		}
+	})
+
+	t.Run("empty sessionID returns miss", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		r := &Reader{claudeDir: tmpDir}
+		if title, ok := r.ReadAITitle("/tmp/foo", ""); ok || title != "" {
+			t.Fatalf("ReadAITitle = (%q, %v), want (\"\", false)", title, ok)
+		}
+	})
+
+	t.Run("transcript with no ai-title entry returns miss", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		r := &Reader{claudeDir: tmpDir}
+		workDir := "/test/project"
+		sessionID := "sess-no-title"
+		writeRawJSONL(t, r.getTranscriptPath(workDir, sessionID), []string{
+			`{"type":"mode","mode":"normal","sessionId":"sess-no-title"}`,
+			`{"type":"user","message":{"role":"user","content":"hi"},"timestamp":"2024-01-01T00:00:00Z"}`,
+		})
+		if title, ok := r.ReadAITitle(workDir, sessionID); ok || title != "" {
+			t.Fatalf("ReadAITitle = (%q, %v), want (\"\", false)", title, ok)
+		}
+	})
+
+	t.Run("returns aiTitle when present", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		r := &Reader{claudeDir: tmpDir}
+		workDir := "/test/project"
+		sessionID := "sess-with-title"
+		writeRawJSONL(t, r.getTranscriptPath(workDir, sessionID), []string{
+			`{"type":"mode","mode":"normal","sessionId":"sess-with-title"}`,
+			`{"type":"ai-title","aiTitle":"リポジトリの目的を確認","sessionId":"sess-with-title"}`,
+			`{"type":"user","message":{"role":"user","content":"hi"},"timestamp":"2024-01-01T00:00:00Z"}`,
+		})
+		title, ok := r.ReadAITitle(workDir, sessionID)
+		if !ok || title != "リポジトリの目的を確認" {
+			t.Fatalf("ReadAITitle = (%q, %v), want (%q, true)", title, ok, "リポジトリの目的を確認")
+		}
+	})
+
+	t.Run("multiple ai-title entries return the last one", func(t *testing.T) {
+		// CC may re-title the session as the conversation evolves. Callers
+		// should see the latest title, not the first.
+		tmpDir := t.TempDir()
+		r := &Reader{claudeDir: tmpDir}
+		workDir := "/test/project"
+		sessionID := "sess-relabel"
+		writeRawJSONL(t, r.getTranscriptPath(workDir, sessionID), []string{
+			`{"type":"ai-title","aiTitle":"first title","sessionId":"sess-relabel"}`,
+			`{"type":"user","message":{"role":"user","content":"more"},"timestamp":"2024-01-01T00:00:00Z"}`,
+			`{"type":"ai-title","aiTitle":"second title","sessionId":"sess-relabel"}`,
+		})
+		title, ok := r.ReadAITitle(workDir, sessionID)
+		if !ok || title != "second title" {
+			t.Fatalf("ReadAITitle = (%q, %v), want (%q, true)", title, ok, "second title")
+		}
+	})
+
+	t.Run("malformed lines are skipped", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		r := &Reader{claudeDir: tmpDir}
+		workDir := "/test/project"
+		sessionID := "sess-broken"
+		writeRawJSONL(t, r.getTranscriptPath(workDir, sessionID), []string{
+			`{not json`,
+			`{"type":"ai-title","aiTitle":"survives","sessionId":"sess-broken"}`,
+			`}also not json`,
+		})
+		title, ok := r.ReadAITitle(workDir, sessionID)
+		if !ok || title != "survives" {
+			t.Fatalf("ReadAITitle = (%q, %v), want (%q, true)", title, ok, "survives")
+		}
+	})
+
+	t.Run("empty aiTitle value is treated as absent", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		r := &Reader{claudeDir: tmpDir}
+		workDir := "/test/project"
+		sessionID := "sess-empty"
+		writeRawJSONL(t, r.getTranscriptPath(workDir, sessionID), []string{
+			`{"type":"ai-title","aiTitle":"","sessionId":"sess-empty"}`,
+		})
+		if title, ok := r.ReadAITitle(workDir, sessionID); ok || title != "" {
+			t.Fatalf("ReadAITitle = (%q, %v), want (\"\", false)", title, ok)
+		}
+	})
+}

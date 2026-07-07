@@ -12,105 +12,6 @@ import (
 	"github.com/takaaki-s/jindaiko/internal/transcript"
 )
 
-func TestInterpretUserPrompt(t *testing.T) {
-	tests := []struct {
-		name   string
-		text   string
-		want   string
-		wantOk bool
-	}{
-		{
-			name:   "empty string is pending",
-			text:   "",
-			wantOk: false,
-		},
-		{
-			name:   "whitespace only is pending",
-			text:   "   \t \n ",
-			wantOk: false,
-		},
-		{
-			name:   "under three bytes is pending",
-			text:   "hi",
-			wantOk: false,
-		},
-		{
-			// Two-rune multi-byte string is 6 bytes but must still be treated
-			// as pending: the minimum applies in runes, not bytes (F005).
-			name:   "two rune multibyte is pending",
-			text:   "あい",
-			wantOk: false,
-		},
-		{
-			// Three-rune multi-byte string clears the rune-length gate.
-			name:   "three rune multibyte is accepted",
-			text:   "あいう",
-			want:   "あいう",
-			wantOk: true,
-		},
-		{
-			// Slash-command with 2-rune args is pending: below the 10-rune
-			// threshold even though "認証" is 6 bytes.
-			name:   "slash command with short multibyte args is pending",
-			text:   "/init 認証",
-			wantOk: false,
-		},
-		{
-			// Slash-command with 10-rune args (30 bytes) crosses the gate.
-			name:   "slash command with long multibyte args is accepted",
-			text:   "/init 認証実装をお願いしたいです",
-			want:   "認証実装をお願いしたいです",
-			wantOk: true,
-		},
-		{
-			name:   "slash command with no args is pending",
-			text:   "/init",
-			wantOk: false,
-		},
-		{
-			name:   "slash command with short args is pending",
-			text:   "/init abcdefg",
-			wantOk: false,
-		},
-		{
-			name:   "slash command with meaningful args uses args",
-			text:   "/init auth モジュールをリファクタリング",
-			want:   "auth モジュールをリファクタリング",
-			wantOk: true,
-		},
-		{
-			name:   "plain text is used verbatim",
-			text:   "実装してください",
-			want:   "実装してください",
-			wantOk: true,
-		},
-		{
-			name:   "multi-line text keeps only the first line",
-			text:   "line1\nline2 with more content here",
-			want:   "line1",
-			wantOk: true,
-		},
-		{
-			name:   "leading and trailing whitespace is trimmed",
-			text:   "   hello world   ",
-			want:   "hello world",
-			wantOk: true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok := interpretUserPrompt(tc.text)
-			if ok != tc.wantOk {
-				t.Fatalf("ok = %v, want %v (got=%q)", ok, tc.wantOk, got)
-			}
-			if got != tc.want {
-				t.Errorf("got = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestSmartTruncate(t *testing.T) {
 	const max = 60
 
@@ -197,38 +98,11 @@ func TestSmartTruncate(t *testing.T) {
 	}
 }
 
-// writeTranscript encodes entries as JSONL beneath a fake HOME/.claude tree.
-// Mirrors the layout used by transcript.Reader so ReadEntries can locate the
-// file via HOME override + the workDir → encoded path mapping.
-func writeTranscript(t *testing.T, home, workDir, sessionID string, entries []any) {
-	t.Helper()
-	encoded := strings.ReplaceAll(workDir, "/", "-")
-	dir := filepath.Join(home, ".claude", "projects", encoded)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", dir, err)
-	}
-	path := filepath.Join(dir, sessionID+".jsonl")
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatalf("create %s: %v", path, err)
-	}
-	defer f.Close()
-	enc := json.NewEncoder(f)
-	for _, e := range entries {
-		if err := enc.Encode(e); err != nil {
-			t.Fatalf("encode entry: %v", err)
-		}
-	}
-}
-
 // newEnhancer builds a CCDescriptionEnhancer bound to a fresh, empty temp dir
-// set as HOME, and returns that dir so callers can write a transcript beneath
-// it via writeTranscript. Owning HOME setup here (rather than leaving it to
-// each subtest) guarantees the name-fallback path never accidentally matches
-// a real ~/.claude/sessions/*.json on the developer's machine: nothing but
-// writeTranscript's own .claude/projects/ tree exists under this HOME, so
-// CCSessionNameReader.LookupName always misses unless a subtest deliberately
-// populates .claude/sessions/ itself.
+// set as HOME, and returns that dir so callers can populate a fake transcript
+// via writeAITitle or a fake session name file via writeSessionName. Owning
+// HOME setup here (rather than leaving it to each subtest) guarantees the
+// lookup never accidentally matches real files on the developer's machine.
 func newEnhancer(t *testing.T) (*CCDescriptionEnhancer, string) {
 	t.Helper()
 	home := t.TempDir()
@@ -237,6 +111,58 @@ func newEnhancer(t *testing.T) (*CCDescriptionEnhancer, string) {
 		reader:     transcript.NewReader(),
 		nameReader: NewCCSessionNameReader(),
 	}, home
+}
+
+// writeAITitle writes a fake ~/.claude/projects/<encoded>/<sessionID>.jsonl
+// containing a single `type:"ai-title"` entry, mirroring what Claude Code
+// emits when it names the conversation. workDir must match the sess.WorkDir
+// used in the corresponding TryGenerate call (or its CurrentWorkDir), since
+// the transcript reader locates files by the workDir→encoded-path mapping.
+func writeAITitle(t *testing.T, home, workDir, sessionID, title string) {
+	t.Helper()
+	encoded := strings.ReplaceAll(workDir, "/", "-")
+	dir := filepath.Join(home, ".claude", "projects", encoded)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	path := filepath.Join(dir, sessionID+".jsonl")
+	line := `{"type":"ai-title","aiTitle":` + jsonString(t, title) + `,"sessionId":` + jsonString(t, sessionID) + "}\n"
+	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func jsonString(t *testing.T, s string) string {
+	t.Helper()
+	raw, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal string: %v", err)
+	}
+	return string(raw)
+}
+
+// writeSessionName writes a fake ~/.claude/sessions/<id>.json file so
+// CCSessionNameReader.LookupName can find it by sessionId, mirroring the
+// layout CC 2.x writes at SessionStart. Pass nameSource="" to omit the field
+// (mirrors older CC versions).
+func writeSessionName(t *testing.T, home, sessionID, name, nameSource string) {
+	t.Helper()
+	dir := filepath.Join(home, ".claude", "sessions")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	payload := map[string]string{"sessionId": sessionID, "name": name}
+	if nameSource != "" {
+		payload["nameSource"] = nameSource
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal session name: %v", err)
+	}
+	path := filepath.Join(dir, sessionID+".json")
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
 }
 
 func TestCCDescriptionEnhancer_TryGenerate(t *testing.T) {
@@ -255,214 +181,138 @@ func TestCCDescriptionEnhancer_TryGenerate(t *testing.T) {
 		}
 	})
 
-	t.Run("missing transcript returns pending", func(t *testing.T) {
+	t.Run("missing name file returns pending", func(t *testing.T) {
 		e, _ := newEnhancer(t)
 		sess := &session.Session{
 			WorkDir:        "/tmp/foo",
 			AgentSessionID: "cc-missing",
 		}
 		if got, _, ok := e.TryGenerate(sess); ok || got != "" {
-			t.Fatalf("TryGenerate(missing transcript) = (%q, %v), want (\"\", false)", got, ok)
+			t.Fatalf("TryGenerate(missing name) = (%q, %v), want (\"\", false)", got, ok)
 		}
 	})
 
-	t.Run("first user turn is a slash command with no args → pending", func(t *testing.T) {
+	// A "derived" name is the tmux hint that jindaiko itself passed CC; we
+	// accept it but flag it as the weak Layer C-name sublayer so a later
+	// stronger name can overwrite it.
+	t.Run("derived name maps to LayerAgentNameDerived", func(t *testing.T) {
 		e, home := newEnhancer(t)
-		workDir := "/tmp/pending-slash"
-		sessionID := "cc-pending"
-		writeTranscript(t, home, workDir, sessionID, []any{
-			map[string]any{
-				"type":      "user",
-				"timestamp": "2026-01-01T00:00:00Z",
-				"message": map[string]any{
-					"role":    "user",
-					"content": "/init",
-				},
-			},
-		})
-		sess := &session.Session{WorkDir: workDir, AgentSessionID: sessionID}
-		got, _, ok := e.TryGenerate(sess)
-		if ok || got != "" {
-			t.Fatalf("TryGenerate(pending slash) = (%q, %v), want (\"\", false)", got, ok)
-		}
-	})
+		sessionID := "cc-derived"
+		writeSessionName(t, home, sessionID, "jin-395bce5c-71", "derived")
 
-	t.Run("first user turn plain text is used verbatim", func(t *testing.T) {
-		e, home := newEnhancer(t)
-		workDir := "/tmp/plain"
-		sessionID := "cc-plain"
-		writeTranscript(t, home, workDir, sessionID, []any{
-			map[string]any{
-				"type":      "user",
-				"timestamp": "2026-01-01T00:00:00Z",
-				"message": map[string]any{
-					"role":    "user",
-					"content": "implement the auth refactor please",
-				},
-			},
-		})
-		sess := &session.Session{WorkDir: workDir, AgentSessionID: sessionID}
-		got, _, ok := e.TryGenerate(sess)
+		sess := &session.Session{WorkDir: "/tmp/derived", AgentSessionID: sessionID}
+		got, layer, ok := e.TryGenerate(sess)
 		if !ok {
 			t.Fatalf("TryGenerate = (%q, %v), want ok=true", got, ok)
 		}
-		want := "implement the auth refactor please"
-		if got != want {
-			t.Errorf("got = %q, want %q", got, want)
+		if layer != session.DescriptionLayerAgentNameDerived {
+			t.Errorf("layer = %d, want %d (DescriptionLayerAgentNameDerived)", layer, session.DescriptionLayerAgentNameDerived)
+		}
+		if got != "jin-395bce5c-71" {
+			t.Errorf("got = %q, want %q", got, "jin-395bce5c-71")
 		}
 	})
 
-	t.Run("skips pending user turn and uses the next non-pending prompt", func(t *testing.T) {
-		// F003 regression: the head entry ("/init") is a slash command with no
-		// args and must be classified as pending. Prior to the fix, the loop
-		// returned pending immediately, so the transcript could never move
-		// past "/init" no matter how many prompts followed. The enhancer must
-		// keep scanning until a real prompt is found.
+	// A non-derived name (typical value when CC has re-classified the field
+	// from the conversation) rides the strong Layer C-name sublayer so it
+	// wins over any previously-persisted derived candidate.
+	t.Run("non-derived name maps to LayerAgentName", func(t *testing.T) {
 		e, home := newEnhancer(t)
-		workDir := "/tmp/pending-then-real"
-		sessionID := "cc-pending-then-real"
-		writeTranscript(t, home, workDir, sessionID, []any{
-			map[string]any{
-				"type":      "user",
-				"timestamp": "2026-01-01T00:00:00Z",
-				"message": map[string]any{
-					"role":    "user",
-					"content": "/init",
-				},
-			},
-			map[string]any{
-				"type":      "user",
-				"timestamp": "2026-01-01T00:00:01Z",
-				"message": map[string]any{
-					"role":    "user",
-					"content": "実装してください",
-				},
-			},
-		})
-		sess := &session.Session{WorkDir: workDir, AgentSessionID: sessionID}
-		got, _, ok := e.TryGenerate(sess)
-		if !ok {
-			t.Fatalf("TryGenerate = (%q, %v), want ok=true (should skip pending /init and pick next prompt)", got, ok)
-		}
-		want := "実装してください"
-		if got != want {
-			t.Errorf("got = %q, want %q", got, want)
-		}
-	})
+		sessionID := "cc-strong"
+		writeSessionName(t, home, sessionID, "auth-refactor", "generated")
 
-	t.Run("skips leading non-user entries and empty text blocks", func(t *testing.T) {
-		e, home := newEnhancer(t)
-		workDir := "/tmp/skip"
-		sessionID := "cc-skip"
-		writeTranscript(t, home, workDir, sessionID, []any{
-			// Non-user turn first — should be ignored.
-			map[string]any{
-				"type":      "assistant",
-				"timestamp": "2026-01-01T00:00:00Z",
-				"message": map[string]any{
-					"role": "assistant",
-					"content": []any{
-						map[string]any{"type": "text", "text": "hello from the assistant"},
-					},
-				},
-			},
-			// User turn whose only text block is whitespace — also skipped.
-			map[string]any{
-				"type":      "user",
-				"timestamp": "2026-01-01T00:00:01Z",
-				"message": map[string]any{
-					"role":    "user",
-					"content": "   \n\t ",
-				},
-			},
-			// Third entry has the real prompt.
-			map[string]any{
-				"type":      "user",
-				"timestamp": "2026-01-01T00:00:02Z",
-				"message": map[string]any{
-					"role":    "user",
-					"content": "actual first user prompt goes here",
-				},
-			},
-		})
-		sess := &session.Session{WorkDir: workDir, AgentSessionID: sessionID}
-		got, _, ok := e.TryGenerate(sess)
+		sess := &session.Session{WorkDir: "/tmp/strong", AgentSessionID: sessionID}
+		got, layer, ok := e.TryGenerate(sess)
 		if !ok {
 			t.Fatalf("TryGenerate = (%q, %v), want ok=true", got, ok)
 		}
-		want := "actual first user prompt goes here"
-		if got != want {
-			t.Errorf("got = %q, want %q", got, want)
+		if layer != session.DescriptionLayerAgentName {
+			t.Errorf("layer = %d, want %d (DescriptionLayerAgentName)", layer, session.DescriptionLayerAgentName)
+		}
+		if got != "auth-refactor" {
+			t.Errorf("got = %q, want %q", got, "auth-refactor")
 		}
 	})
-}
 
-// writeSessionName writes a fake ~/.claude/sessions/<id>.json file so
-// CCSessionNameReader.LookupName can find it by sessionId, mirroring the
-// layout CC 2.x writes at SessionStart.
-func writeSessionName(t *testing.T, home, sessionID, name string) {
-	t.Helper()
-	dir := filepath.Join(home, ".claude", "sessions")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", dir, err)
-	}
-	raw, err := json.Marshal(map[string]string{"sessionId": sessionID, "name": name})
-	if err != nil {
-		t.Fatalf("marshal session name: %v", err)
-	}
-	path := filepath.Join(dir, sessionID+".json")
-	if err := os.WriteFile(path, raw, 0o644); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
-}
+	// A name with no nameSource field (older CC versions, or hand-authored
+	// files) is treated as strong: absence of the flag is not the same as
+	// an explicit "derived" tag, and refusing to promote it would leave
+	// legacy sessions stuck at Baseline.
+	t.Run("missing nameSource is treated as strong", func(t *testing.T) {
+		e, home := newEnhancer(t)
+		sessionID := "cc-legacy"
+		writeSessionName(t, home, sessionID, "legacy-name", "")
 
-func TestCCDescriptionEnhancer_FallbackToName(t *testing.T) {
-	e, home := newEnhancer(t)
-	sessionID := "cc-name-fallback"
-	writeSessionName(t, home, sessionID, "jindaiko-d1")
-
-	sess := &session.Session{WorkDir: "/tmp/name-fallback", AgentSessionID: sessionID}
-	got, layer, ok := e.TryGenerate(sess)
-	if !ok {
-		t.Fatalf("TryGenerate = (%q, %v), want ok=true", got, ok)
-	}
-	if layer != session.DescriptionLayerAgentName {
-		t.Errorf("layer = %d, want %d (DescriptionLayerAgentName)", layer, session.DescriptionLayerAgentName)
-	}
-	want := "jindaiko-d1"
-	if got != want {
-		t.Errorf("got = %q, want %q", got, want)
-	}
-}
-
-func TestCCDescriptionEnhancer_TranscriptPreferred(t *testing.T) {
-	e, home := newEnhancer(t)
-	workDir := "/tmp/transcript-preferred"
-	sessionID := "cc-transcript-preferred"
-	writeTranscript(t, home, workDir, sessionID, []any{
-		map[string]any{
-			"type":      "user",
-			"timestamp": "2026-01-01T00:00:00Z",
-			"message": map[string]any{
-				"role":    "user",
-				"content": "implement the transcript path please",
-			},
-		},
+		sess := &session.Session{WorkDir: "/tmp/legacy", AgentSessionID: sessionID}
+		got, layer, ok := e.TryGenerate(sess)
+		if !ok {
+			t.Fatalf("TryGenerate = (%q, %v), want ok=true", got, ok)
+		}
+		if layer != session.DescriptionLayerAgentName {
+			t.Errorf("layer = %d, want %d (DescriptionLayerAgentName)", layer, session.DescriptionLayerAgentName)
+		}
+		if got != "legacy-name" {
+			t.Errorf("got = %q, want %q", got, "legacy-name")
+		}
 	})
-	// A name is also on disk, but the transcript hit must win since it's the
-	// higher layer.
-	writeSessionName(t, home, sessionID, "jindaiko-different-name")
 
-	sess := &session.Session{WorkDir: workDir, AgentSessionID: sessionID}
-	got, layer, ok := e.TryGenerate(sess)
-	if !ok {
-		t.Fatalf("TryGenerate = (%q, %v), want ok=true", got, ok)
-	}
-	if layer != session.DescriptionLayerTranscript {
-		t.Errorf("layer = %d, want %d (DescriptionLayerTranscript)", layer, session.DescriptionLayerTranscript)
-	}
-	want := "implement the transcript path please"
-	if got != want {
-		t.Errorf("got = %q, want %q", got, want)
-	}
+	// aiTitle is the transcript-embedded "Session name" CC surfaces in
+	// /status. When present it should win over the session-name file at
+	// the same DescriptionLayerAgentName tier — the layer's strict-greater
+	// promotion guard then keeps whichever landed first, but the ordering
+	// here documents the informativeness preference.
+	t.Run("aiTitle drives LayerAgentName even when derived name is also present", func(t *testing.T) {
+		e, home := newEnhancer(t)
+		workDir := "/tmp/ai-title"
+		sessionID := "cc-ai-title"
+		writeAITitle(t, home, workDir, sessionID, "リポジトリの目的を確認")
+		// A derived name is also on disk, but aiTitle must be picked first.
+		writeSessionName(t, home, sessionID, "jin-395bce5c-71", "derived")
+
+		sess := &session.Session{WorkDir: workDir, AgentSessionID: sessionID}
+		got, layer, ok := e.TryGenerate(sess)
+		if !ok {
+			t.Fatalf("TryGenerate = (%q, %v), want ok=true", got, ok)
+		}
+		if layer != session.DescriptionLayerAgentName {
+			t.Errorf("layer = %d, want %d (DescriptionLayerAgentName)", layer, session.DescriptionLayerAgentName)
+		}
+		if got != "リポジトリの目的を確認" {
+			t.Errorf("got = %q, want %q", got, "リポジトリの目的を確認")
+		}
+	})
+
+	// When the transcript exists but has no aiTitle entry yet (the common
+	// state right after SessionStart), we must fall through to the session
+	// name file rather than fail closed.
+	t.Run("no aiTitle falls through to session name file", func(t *testing.T) {
+		e, home := newEnhancer(t)
+		workDir := "/tmp/no-ai-title"
+		sessionID := "cc-no-ai-title"
+		// Transcript file exists but has no ai-title line.
+		encoded := strings.ReplaceAll(workDir, "/", "-")
+		dir := filepath.Join(home, ".claude", "projects", encoded)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		path := filepath.Join(dir, sessionID+".jsonl")
+		if err := os.WriteFile(path,
+			[]byte(`{"type":"mode","mode":"normal","sessionId":"`+sessionID+`"}`+"\n"),
+			0o644); err != nil {
+			t.Fatalf("write transcript: %v", err)
+		}
+		writeSessionName(t, home, sessionID, "jin-derived-name", "derived")
+
+		sess := &session.Session{WorkDir: workDir, AgentSessionID: sessionID}
+		got, layer, ok := e.TryGenerate(sess)
+		if !ok {
+			t.Fatalf("TryGenerate = (%q, %v), want ok=true", got, ok)
+		}
+		if layer != session.DescriptionLayerAgentNameDerived {
+			t.Errorf("layer = %d, want %d (DescriptionLayerAgentNameDerived)", layer, session.DescriptionLayerAgentNameDerived)
+		}
+		if got != "jin-derived-name" {
+			t.Errorf("got = %q, want %q", got, "jin-derived-name")
+		}
+	})
 }
