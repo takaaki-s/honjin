@@ -1,7 +1,10 @@
 // Package claude houses Claude Code-specific glue that must live outside
-// internal/session (which is agent-agnostic). The initial inhabitant is the
-// Layer C DescriptionEnhancer that mines the first user prompt from a session
-// transcript to upgrade the auto-generated Layer A baseline.
+// internal/session (which is agent-agnostic). The Layer C DescriptionEnhancer
+// tracks whatever name Claude Code has settled on for the conversation —
+// preferring the AI-generated title CC writes to the transcript (surfaced in
+// `/status` as "Session name"), and falling back to the name Claude Code
+// writes to ~/.claude/sessions/<PID>.json when no AI title has been recorded
+// yet.
 package claude
 
 import (
@@ -17,29 +20,38 @@ import (
 // leaves headroom for the locked marker.
 const descriptionMaxBytes = 60
 
-// minPromptLen is the shortest prompt we treat as a real hint. Anything under
-// three characters is almost certainly a stray keystroke or a slash-command
-// abbreviation.
-const minPromptLen = 3
-
-// minSlashArgLen is the shortest args string we treat as meaningful when the
-// user starts with a slash command. Below this we assume the user is still
-// typing the command name or has not fed a description yet.
-const minSlashArgLen = 10
+// ccNameSourceDerived is the value CC 2.x writes to nameSource when the
+// session name was derived from the tmux window name (or another externally
+// supplied hint) rather than generated from the conversation. jindaiko itself
+// hands CC that hint, so a "derived" name round-trips our own tmux name
+// (e.g. "jin-<8>-<2>") back into Description. It is still slightly better
+// than the Layer A baseline — it matches CC's own /resume picker — so we
+// accept it at the weak Layer C-name sublayer and let any later, stronger
+// signal overwrite it.
+const ccNameSourceDerived = "derived"
 
 // CCDescriptionEnhancer implements session.DescriptionEnhancer using two
-// Claude Code-specific signals, tried in order of informativeness: the
-// transcript's first user turn (Layer C-transcript), falling back to the
-// session name CC writes to ~/.claude/sessions/<PID>.json at start-up
-// (Layer C-name) when no transcript is available yet.
+// Claude Code-specific signals, tried in order of informativeness:
+//
+//  1. The AI-generated title CC writes to the transcript as
+//     `{"type":"ai-title","aiTitle":"…"}`. This is the same value CC shows
+//     next to "Session name" in `/status` and is the closest thing CC has
+//     to an authoritative conversation label.
+//  2. The name field in ~/.claude/sessions/<PID>.json. When nameSource is
+//     "derived" this is just the tmux hint jindaiko itself passed CC, so
+//     it is downgraded to the weak sublayer.
+//
+// The enhancer never mines the raw first user prompt — Claude Code owns the
+// session naming and jindaiko lets it lead. Other agents that lack a native
+// naming path can plug their own enhancer that uses DescriptionLayerTranscript.
 type CCDescriptionEnhancer struct {
 	reader     *transcript.Reader
 	nameReader *CCSessionNameReader
 }
 
-// NewCCDescriptionEnhancer builds an enhancer bound to the local ~/.claude
-// transcript and sessions stores. Safe to share across goroutines: both
-// underlying readers only perform read-only file I/O.
+// NewCCDescriptionEnhancer builds an enhancer bound to the local
+// ~/.claude/{projects,sessions} stores. Safe to share across goroutines:
+// both underlying readers only perform read-only file I/O.
 func NewCCDescriptionEnhancer() *CCDescriptionEnhancer {
 	return &CCDescriptionEnhancer{
 		reader:     transcript.NewReader(),
@@ -47,100 +59,49 @@ func NewCCDescriptionEnhancer() *CCDescriptionEnhancer {
 	}
 }
 
-// TryGenerate tries the transcript first since it yields the higher-quality
-// Layer C-transcript description, then falls back to the CC-assigned session
-// name (Layer C-name) which is available as early as SessionStart, before any
-// transcript has been written. Never mutates sess.
+// TryGenerate returns the best available Layer C-name candidate for sess.
+//
+// The tried-in-order layering is:
+//
+//   - Transcript aiTitle → DescriptionLayerAgentName (strong).
+//     CC-authored conversation title; overrides everything below.
+//   - sessions/<PID>.json name with nameSource != "derived" →
+//     DescriptionLayerAgentName (strong). Same tier as aiTitle so whichever
+//     one lands first is preserved by the strict-greater layer guard.
+//   - sessions/<PID>.json name with nameSource == "derived" →
+//     DescriptionLayerAgentNameDerived (weak). The round-trip of jindaiko's
+//     own tmux hint; escapes the Baseline but lets any later stronger name
+//     overwrite it.
+//
+// Returns ("", 0, false) when no signal is available: nil sess, missing
+// AgentSessionID, no transcript file yet AND no session-name file. Never
+// mutates sess. Never returns an error.
 func (e *CCDescriptionEnhancer) TryGenerate(sess *session.Session) (string, session.DescriptionLayer, bool) {
 	if sess == nil || sess.AgentSessionID == "" {
 		return "", 0, false
 	}
 
-	if cand, ok := e.tryTranscript(sess); ok {
-		return cand, session.DescriptionLayerTranscript, true
+	if e.reader != nil {
+		workDir := sess.CurrentWorkDir
+		if workDir == "" {
+			workDir = sess.WorkDir
+		}
+		if title, ok := e.reader.ReadAITitle(workDir, sess.AgentSessionID); ok {
+			return smartTruncate(title, descriptionMaxBytes), session.DescriptionLayerAgentName, true
+		}
 	}
 
 	if e.nameReader != nil {
-		if name, _, ok := e.nameReader.LookupName(sess.AgentSessionID); ok {
-			return smartTruncate(name, descriptionMaxBytes), session.DescriptionLayerAgentName, true
+		if name, src, ok := e.nameReader.LookupName(sess.AgentSessionID); ok {
+			layer := session.DescriptionLayerAgentName
+			if src == ccNameSourceDerived {
+				layer = session.DescriptionLayerAgentNameDerived
+			}
+			return smartTruncate(name, descriptionMaxBytes), layer, true
 		}
 	}
 
 	return "", 0, false
-}
-
-// tryTranscript mines the first meaningful user prompt from the transcript
-// associated with sess.AgentSessionID, applying the slash-command aware
-// interpretation documented in the F4 spec.
-func (e *CCDescriptionEnhancer) tryTranscript(sess *session.Session) (string, bool) {
-	workDir := sess.CurrentWorkDir
-	if workDir == "" {
-		workDir = sess.WorkDir
-	}
-	entries, err := e.reader.ReadEntries(workDir, sess.AgentSessionID, "")
-	if err != nil || len(entries) == 0 {
-		return "", false
-	}
-	for _, ent := range entries {
-		if ent.Type != "user" {
-			continue
-		}
-		text := extractFirstText(ent.Blocks)
-		if text == "" {
-			continue
-		}
-		if cand, ok := interpretUserPrompt(text); ok {
-			return cand, true
-		}
-	}
-	return "", false
-}
-
-// extractFirstText returns the first non-empty "text" block within a user
-// turn's blocks. Tool result blocks and other kinds are skipped so we do not
-// mistake reply payloads for the user's own words.
-func extractFirstText(blocks []transcript.Block) string {
-	for _, b := range blocks {
-		if b.Kind != "text" {
-			continue
-		}
-		if s := strings.TrimSpace(b.Text); s != "" {
-			return s
-		}
-	}
-	return ""
-}
-
-// interpretUserPrompt turns the raw first-user-turn text into a description
-// candidate following the F4 rules:
-//
-//   - Empty or trivially short input yields no candidate.
-//   - Slash commands with no args (or with args shorter than minSlashArgLen)
-//     are considered pending — the user is still composing the request.
-//   - Slash commands with meaningful args use the args as the description.
-//   - Plain text uses the message body directly.
-//
-// The returned string is smart-truncated so it fits inside the list view.
-func interpretUserPrompt(text string) (string, bool) {
-	text = strings.TrimSpace(text)
-	// Length thresholds are measured in runes so multi-byte scripts (Japanese,
-	// CJK, emoji) aren't unfairly rejected as "too short". A three-character
-	// Japanese prompt weighs nine bytes and would fail a byte-length gate.
-	if utf8.RuneCountInString(text) < minPromptLen {
-		return "", false
-	}
-	if strings.HasPrefix(text, "/") {
-		parts := strings.SplitN(text, " ", 2)
-		if len(parts) < 2 {
-			return "", false
-		}
-		args := strings.TrimSpace(parts[1])
-		if utf8.RuneCountInString(args) < minSlashArgLen {
-			return "", false
-		}
-		return smartTruncate(args, descriptionMaxBytes), true
-	}
-	return smartTruncate(text, descriptionMaxBytes), true
 }
 
 // smartTruncate keeps the first line of s and shortens it to at most maxBytes

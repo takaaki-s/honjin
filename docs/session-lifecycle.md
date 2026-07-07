@@ -60,7 +60,7 @@ Session (runtime only, json:"-")
 ├─ CurrentWorkDir   string            // tmux pane_current_path
 ├─ CurrentBranch    string            // git branch
 ├─ IsGitRepo        bool
-└─ DescriptionLayer DescriptionLayer  // 0=Baseline, 1=Layer C-name, 2=Layer C-transcript; drives Manager.TryUpgradeDescription's promotion guard
+└─ DescriptionLayer DescriptionLayer  // 0=Baseline, 1=Layer C-name (derived), 2=Layer C-name (strong), 3=Layer C-transcript; drives Manager.TryUpgradeDescription's promotion guard
 ```
 
 ## Description Model
@@ -69,9 +69,11 @@ Sessions carry a `Description` (human-readable label) that is separate from the 
 
 - **Layer A (baseline)** — `GenerateBaselineDescription(workDir, branch, isWorktree, tmuxHint)` produces `<repo>[:<branch>][:<subpath>]` (e.g. `jindaiko:main`). Always populated at session creation, never empty. Agent-independent.
 - **Layer B (manual override)** — Set via `--description` on `session new`, the `set-description` subcommand, or the TUI description step. Sets `DescriptionLocked = true`, blocking Layer C.
-- **Layer C (agent-specific enhancer)** — On `SessionStart` / `UserPromptSubmit` / `Stop` hooks, if `DescriptionLocked = false`, the registered `DescriptionEnhancer` (currently `internal/agent/claude/CCDescriptionEnhancer`) returns a `(candidate, DescriptionLayer, ok)` tuple. `TryUpgradeDescription` applies the candidate only when its `DescriptionLayer` is strictly higher than the session's current layer, giving a 3-stage promotion path:
-  - **Layer C-name** (`DescriptionLayerAgentName`) — reads `~/.claude/sessions/<PID>.json` for the name Claude Code assigned (`jindaiko-42`). Fires at `SessionStart`, so the description leaves the Layer A baseline the moment the process boots.
-  - **Layer C-transcript** (`DescriptionLayerTranscript`) — mines the first meaningful user prompt from the transcript. Slash commands (`/init …`) without substantial args are treated as pending and skipped. Overwrites Layer C-name.
+- **Layer C (agent-specific enhancer)** — On `SessionStart` / `UserPromptSubmit` / `Stop` hooks, if `DescriptionLocked = false`, the registered `DescriptionEnhancer` (currently `internal/agent/claude/CCDescriptionEnhancer`) returns a `(candidate, DescriptionLayer, ok)` tuple. `TryUpgradeDescription` applies the candidate only when its `DescriptionLayer` is strictly higher than the session's current layer. The Claude Code enhancer tries two signals in order of informativeness:
+  - **Layer C-name (strong)** (`DescriptionLayerAgentName`) — first checks the transcript for `{"type":"ai-title","aiTitle":"…"}` (the value CC surfaces as "Session name" in `/status`). If absent, falls back to `~/.claude/sessions/<PID>.json`'s `name` when `nameSource` is anything other than `"derived"` (or the field is missing on older CC versions). This is the definitive name — treated as final Layer C-name for the session.
+  - **Layer C-name (derived)** (`DescriptionLayerAgentNameDerived`) — `~/.claude/sessions/<PID>.json` `name` with `nameSource == "derived"`: the tmux window hint jindaiko itself handed CC (e.g. `jin-395bce5c-71`). Fires at `SessionStart`, so the description leaves the Layer A baseline the moment the process boots, but any later stronger name (`aiTitle`, `/rename`) still overwrites it.
+
+  The CC enhancer never returns `DescriptionLayerTranscript`: Claude Code owns the naming and eventually writes `aiTitle`, so the raw first user prompt is never promoted into `Description`. `DescriptionLayerTranscript` remains in the layer enum for future adapters that lack a native session-name field.
 
   `Session.DescriptionLayer` is a runtime-only field (`json:"-"`), so daemon restart resets it to zero. A separate guard (`Description != baseline && layer == 0 → skip`) prevents a lower layer from clobbering a higher-layer value that survived the restart in the persisted `Description`.
 

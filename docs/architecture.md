@@ -47,7 +47,7 @@ the agent adapter — `HandleHookEvent` itself is agent-agnostic wiring. The
 Claude Code mapping is documented in `internal/agent/claude/status.go`; the
 common cases are:
 
-- `UserPromptSubmit` → StatusThinking + Layer C Description upgrade attempt
+- `UserPromptSubmit` → StatusThinking + Layer C Description upgrade attempt (may pick up a stronger CC-authored name if CC has renamed the session since SessionStart)
 - `Stop` → StatusIdle + task-complete notification
 - `Notification(permission_prompt)` → StatusPermission + permission notification
 
@@ -63,7 +63,7 @@ internal/agent/         re-exports the same types as aliases; hosts registry
 internal/agent/register blank-import → wires every kind into the registry at init()
 internal/agent/claude/  Claude Code adapter: SpawnCommand / StatusSource / Setup
                          (hooks-settings.json + trust-dialog files), Description
-                         (Layer C enhancer over the transcript)
+                         (Layer C enhancer over ~/.claude/sessions/<PID>.json)
 ```
 
 The daemon injects a thin resolver (`agent.Lookup`) into `session.Manager`,
@@ -77,9 +77,11 @@ Sessions carry a human-readable `Description` field decoupled from the technical
 
 - **Layer A (baseline)** — Always populated at creation from `<repo>[:<branch>][:<subpath>]`, or `<main-repo>:<worktree-name>` for worktree sessions. Agent-independent. Implemented in `internal/session/description.go`.
 - **Layer B (manual)** — CLI `--description` on `jin session new` and the `jin session set-description` subcommand. Sets `DescriptionLocked = true` to freeze the value against auto-upgrade. (The TUI create form intentionally does not expose a manual description step: Layer A + Layer C cover the common case; users who need a manual label use the CLI paths.)
-- **Layer C (agent-specific enhancer)** — Returned by the adapter through `Agent.Description() DescriptionEnhancer`; `HandleHookEvent` looks it up from the resolved adapter on every `SessionStart` / `UserPromptSubmit` / `Stop` hook (Manager holds no separate enhancer field). Enhancers return a `(candidate, DescriptionLayer, ok)` tuple; the Manager's `TryUpgradeDescription` only accepts a strictly higher `DescriptionLayer` than the session's current layer, so lower-quality signals never overwrite a better one. The Claude Code implementation (`internal/agent/claude/`) splits Layer C into two sub-layers:
-  - **Layer C-name** (`DescriptionLayerAgentName`) — reads `~/.claude/sessions/<PID>.json` and returns the name Claude Code assigned (e.g. `jindaiko-42`). Available from the `SessionStart` hook, so the description escapes the raw Layer A baseline the moment the process boots.
-  - **Layer C-transcript** (`DescriptionLayerTranscript`) — reads the first user turn from the transcript once it has been flushed. `UserPromptSubmit` is the fast path (fires as soon as CC records the prompt); `Stop` is the reliable fallback that runs after the transcript has been flushed. Overwrites Layer C-name because the transcript-derived label is more informative.
+- **Layer C (agent-specific enhancer)** — Returned by the adapter through `Agent.Description() DescriptionEnhancer`; `HandleHookEvent` looks it up from the resolved adapter on every `SessionStart` / `UserPromptSubmit` / `Stop` hook (Manager holds no separate enhancer field). Enhancers return a `(candidate, DescriptionLayer, ok)` tuple; the Manager's `TryUpgradeDescription` only accepts a strictly higher `DescriptionLayer` than the session's current layer, so lower-quality signals never overwrite a better one. The Claude Code implementation (`internal/agent/claude/`) tries two signals in order of informativeness, splitting Layer C-name into two sub-layers:
+  - **Layer C-name (strong)** (`DescriptionLayerAgentName`) — first tries the AI-generated session title CC writes to the transcript as `{"type":"ai-title","aiTitle":"…"}` (the same value CC shows next to "Session name" in `/status`). If no `aiTitle` is present, falls back to the name in `~/.claude/sessions/<PID>.json` when `nameSource` is anything other than `"derived"` (or the field is absent on older CC versions).
+  - **Layer C-name (weak)** (`DescriptionLayerAgentNameDerived`) — the `name` field in `~/.claude/sessions/<PID>.json` with `nameSource="derived"`: the tmux window hint jindaiko itself handed CC round-tripped back to disk (e.g. `jin-395bce5c-71`). Better than the Layer A baseline because it matches CC's own `/resume` picker, but any stronger name (later `aiTitle`, `/rename`, …) is allowed to overwrite it.
+
+  The CC adapter intentionally does NOT mine the raw first user prompt for a Layer C description. Claude Code owns the naming and eventually replaces the derived hint with `aiTitle`, so pulling the prompt text into `Description` would just clobber that CC-native title with what the user typed. `DescriptionLayerTranscript` is reserved for future adapters that lack a native session-name path.
 
   Future agents (Codex, Aider, …) plug in the same way — return an enhancer from `Description()` (any subset of layers) and the plumbing works for them unchanged.
 
