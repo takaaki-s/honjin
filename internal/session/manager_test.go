@@ -1366,6 +1366,15 @@ func TestManager_EnsureTmuxClient_NotSet(t *testing.T) {
 	mgr.SetAgentResolver(newFakeAgentResolver())
 	t.Cleanup(func() {
 		_ = exec.Command("tmux", "-L", socketName, "kill-server").Run()
+		// tmux 3.x does not unlink its socket file on kill-server (or on natural
+		// server exit when the last session ends). Remove it ourselves to avoid
+		// accumulating stale sockets under $TMUX_TMPDIR/tmux-$UID/ over many
+		// test runs.
+		tmpdir := os.Getenv("TMUX_TMPDIR")
+		if tmpdir == "" {
+			tmpdir = "/tmp"
+		}
+		_ = os.Remove(filepath.Join(tmpdir, fmt.Sprintf("tmux-%d", os.Getuid()), socketName))
 	})
 
 	workDir := t.TempDir()
