@@ -558,7 +558,7 @@ tail -f ~/.local/state/jindaiko/daemon-debug.log
 
 ## 必要要件
 
-- Go 1.21+
+- Go 1.24.5+
 - tmux 3.3+
 - Claude Code CLI がインストールされていること
 
