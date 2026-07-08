@@ -468,9 +468,7 @@ it runs and what environment it gets.
   UI). Set `on: []` to make a plugin action-only.
 
 Both entry points run the same `run:` command with the same environment;
-only the trigger differs. See
-[examples/plugins/diff-review](examples/plugins/diff-review) for a complete
-action plugin.
+only the trigger differs.
 
 ### Manifest (`jin-plugin.yaml`)
 
@@ -583,9 +581,10 @@ linking a local path is itself the trust decision, and jindaiko never runs
   plugin a thin per-event client to it (e.g. `curl`).
 - **Popups don't inherit `JIN_*` env vars.** `jin pane popup` / `jin pane
   split` run their command in a process tmux spawns fresh — pass any data
-  the popup needs as arguments on its command line, not as env vars. See
-  [examples/plugins/diff-review](examples/plugins/diff-review) for the
-  pattern.
+  the popup needs as arguments on its command line (or as env-assignment
+  prefixes in the command string, e.g.
+  `jin pane popup "$JIN_SESSION_ID" -- "JIN_BIN=$JIN_BIN inner.sh --id $JIN_SESSION_ID"`),
+  not as inherited env vars.
 - **Fail-open.** A plugin that errors, times out, or hangs never blocks a
   session's status pipeline — it's logged and the pipeline moves on. Timeout
   defaults to 30s (`timeout:` in the manifest).
