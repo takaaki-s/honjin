@@ -191,5 +191,11 @@ func buildEnv(opts ExecOptions) []string {
 		"JIN_PLUGIN_DEPTH="+strconv.Itoa(opts.Depth),
 		"JIN_SOCKET="+opts.SocketPath,
 	)
+	// JIN_BIN points at the daemon's own binary so plugins can call back into
+	// the exact version that dispatched them. A `jin` found on PATH may be an
+	// older install that lacks newer subcommands (daemon/CLI version skew).
+	if exe, err := os.Executable(); err == nil {
+		env = append(env, "JIN_BIN="+exe)
+	}
 	return env
 }

@@ -100,7 +100,7 @@ run_inner() {
     return 0
   fi
 
-  if ! printf '%s' "$feedback" | jin session send "$session_id" -; then
+  if ! printf '%s' "$feedback" | "${JIN_BIN:-jin}" session send "$session_id" -; then
     echo "diff-review: failed to send feedback (see error above)" >&2
     read -r -p "Press Enter to close... " _ || true
     return 1
@@ -120,7 +120,12 @@ run_inner() {
 # token sidesteps that.
 build_inner_cmd() {
   local self=$1 session_id=$2 workdir=$3
-  printf '%q ' "$self" --inner "$session_id" "$workdir"
+  # The popup does not inherit this process's JIN_* environment, so re-export
+  # the two vars the inner stage needs as env-assignment prefixes: JIN_BIN so
+  # `session send` uses the same binary version as the daemon that dispatched
+  # us (a PATH `jin` may be an older install), and JIN_SOCKET so it reaches
+  # the same daemon even on a non-default socket.
+  printf '%q ' "JIN_BIN=${JIN_BIN:-jin}" "JIN_SOCKET=${JIN_SOCKET:-}" "$self" --inner "$session_id" "$workdir"
 }
 
 # run_outer is the plugin entry point: validate the environment jin injected,
@@ -140,7 +145,7 @@ run_outer() {
   local inner_cmd
   inner_cmd=$(build_inner_cmd "$self" "$JIN_SESSION_ID" "$JIN_WORKDIR")
 
-  jin pane popup "$JIN_SESSION_ID" --title "diff-review" -- "$inner_cmd"
+  "${JIN_BIN:-jin}" pane popup "$JIN_SESSION_ID" --title "diff-review" -- "$inner_cmd"
 }
 
 if [[ "${1:-}" == "--inner" ]]; then

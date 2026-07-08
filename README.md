@@ -512,6 +512,7 @@ Environment variables:
 | `JIN_PLUGIN_API_VERSION` | The `api_version` this plugin declared |
 | `JIN_PLUGIN_DEPTH` | Chain depth — see [Constraints](#constraints) |
 | `JIN_SOCKET` | Daemon socket path; the `jin` CLI a plugin invokes picks this up automatically |
+| `JIN_BIN` | Absolute path of the daemon's own `jin` binary. Prefer `"${JIN_BIN:-jin}"` over a bare `jin` — a `jin` found on PATH may be an older install that lacks newer subcommands |
 
 The same data is also written to **stdin as JSON** (same fields, snake_case).
 

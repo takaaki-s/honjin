@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -72,6 +73,11 @@ func TestExecPlugin_Success(t *testing.T) {
 		if !strings.Contains(env, want) {
 			t.Errorf("env missing %q; env:\n%s", want, env)
 		}
+	}
+	// JIN_BIN carries os.Executable() of the dispatching process — here the
+	// test binary — so assert presence and non-emptiness, not an exact path.
+	if !regexp.MustCompile(`(?m)^JIN_BIN=.+$`).MatchString(env) {
+		t.Errorf("env missing non-empty JIN_BIN; env:\n%s", env)
 	}
 	if strings.Contains(env, "JIN_SHOULD_NOT_LEAK") {
 		t.Errorf("curated env leaked JIN_SHOULD_NOT_LEAK; env:\n%s", env)
