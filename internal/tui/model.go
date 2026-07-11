@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
@@ -44,7 +43,6 @@ type KeyMap struct {
 	NextPage      key.Binding // Scroll one screen down (viewport)
 	Home          key.Binding // Jump to first session
 	End           key.Binding // Jump to last session
-	Search        key.Binding
 	Vscode        key.Binding
 	Notifications key.Binding
 
@@ -109,10 +107,6 @@ func NewKeyMap(cfg config.KeybindingsConfig) KeyMap {
 		End: key.NewBinding(
 			key.WithKeys("end", "G"),
 			key.WithHelp("G/End", "last session"),
-		),
-		Search: key.NewBinding(
-			key.WithKeys(cfg.Search...),
-			key.WithHelp(strings.Join(cfg.Search, "/"), "search"),
 		),
 		Vscode: key.NewBinding(
 			key.WithKeys(cfg.Vscode...),
@@ -206,11 +200,6 @@ type Model struct {
 	// variable. Used to detect Layer C description upgrades between polls so
 	// the tmux status bar template picks them up without a manual switch.
 	lastDisplayedDesc string
-
-	// Search/Filter mode
-	searching        bool            // true when search mode is active
-	searchInput      textinput.Model // text input for search query
-	filteredSessions []session.Info  // filtered result (nil when not searching)
 }
 
 // NewModel creates a new TUI model
@@ -227,17 +216,11 @@ func NewModel(client *daemon.Client) Model {
 	}
 	keys := NewKeyMap(keybindings)
 
-	si := textinput.New()
-	si.Placeholder = "search..."
-	si.CharLimit = 100
-	si.Width = maxTUIWidth - 10
-
 	return Model{
 		client:      client,
 		keys:        keys,
 		focused:     true,
 		configMgr:   configMgr,
-		searchInput: si,
 		deletingIDs: make(map[string]bool),
 	}
 }
@@ -266,7 +249,7 @@ func NewModelWithTmux(client *daemon.Client, tc, innerTC *tmux.Client, tuiPaneID
 
 // contentAreaLines returns the number of lines available for the scrollable
 // card area — the pane height minus the fixed header rows (STATS + blank,
-// plus search bar / error / warning when active).
+// plus error / warning when active).
 func (m *Model) contentAreaLines() int {
 	// Pane holds (m.height - 1) rows (the extra row is the outer help line).
 	avail := m.height - 1
@@ -276,9 +259,6 @@ func (m *Model) contentAreaLines() int {
 	}
 	// Blank separator row between header and cards.
 	avail--
-	if m.searching {
-		avail-- // search input row
-	}
 	if m.err != nil {
 		avail -= 2 // "Error: ..." + blank
 	}
@@ -396,56 +376,9 @@ func (m *Model) clampScroll() {
 	}
 }
 
-// getPageSessions is retained as a thin alias for getDisplaySessions so the
-// large existing call-site set (kill / delete / vscode / handleSelectSession
-// / skipDeletingSessions / …) keeps compiling — cursor is now an index into
-// the full display list rather than a per-page slice. Prefer
-// getDisplaySessions() directly for new code.
-func (m *Model) getPageSessions() []session.Info {
-	return m.getDisplaySessions()
-}
-
-// getDisplaySessions returns the sessions to display:
-// filteredSessions when searching, sessions otherwise.
+// getDisplaySessions returns the sessions to display.
 func (m *Model) getDisplaySessions() []session.Info {
-	if m.searching && m.filteredSessions != nil {
-		return m.filteredSessions
-	}
 	return m.sessions
-}
-
-// matchesSearch returns true if the session matches the search query
-// across any of the target fields (Name, WorkDir, CurrentWorkDir, CurrentBranch).
-func matchesSearch(sess session.Info, query string) bool {
-	fields := []string{
-		sess.Description,
-		sess.WorkDir,
-		sess.CurrentWorkDir,
-		sess.CurrentBranch,
-		sess.Fleet,
-	}
-	for _, field := range fields {
-		if field != "" && strings.Contains(strings.ToLower(field), query) {
-			return true
-		}
-	}
-	return false
-}
-
-// applySearchFilter filters m.sessions using the current search query
-// and stores the result in m.filteredSessions.
-func (m *Model) applySearchFilter() {
-	query := strings.ToLower(m.searchInput.Value())
-	if query == "" {
-		m.filteredSessions = m.sessions
-		return
-	}
-	m.filteredSessions = make([]session.Info, 0)
-	for _, sess := range m.sessions {
-		if matchesSearch(sess, query) {
-			m.filteredSessions = append(m.filteredSessions, sess)
-		}
-	}
 }
 
 // Messages
@@ -682,7 +615,7 @@ func (m *Model) openVSCode(sess *session.Info) {
 
 // handleSelectSession switches the right pane to display the currently selected session.
 func (m Model) handleSelectSession() (tea.Model, tea.Cmd) {
-	pageSessions := m.getPageSessions()
+	pageSessions := m.getDisplaySessions()
 	if len(pageSessions) == 0 || m.cursor >= len(pageSessions) {
 		return m, nil
 	}
@@ -728,7 +661,7 @@ func (m Model) handleSelectSession() (tea.Model, tea.Cmd) {
 // deleting state. Kept in sync with the palette / plugin dispatch so callers
 // never target a session that is transitioning away.
 func (m Model) currentCursorSessionID() string {
-	ps := m.getPageSessions()
+	ps := m.getDisplaySessions()
 	if len(ps) == 0 || m.cursor < 0 || m.cursor >= len(ps) {
 		return ""
 	}
@@ -767,7 +700,7 @@ func (m Model) handleNew() (tea.Model, tea.Cmd) {
 // handleKill enters kill-confirmation mode for the session under the cursor.
 // No-op when the list is empty or the target is already being deleted.
 func (m Model) handleKill() (tea.Model, tea.Cmd) {
-	pageSessions := m.getPageSessions()
+	pageSessions := m.getDisplaySessions()
 	if len(pageSessions) > 0 && m.cursor < len(pageSessions) {
 		sess := pageSessions[m.cursor]
 		if m.deletingIDs[sess.ID] {
@@ -785,7 +718,7 @@ func (m Model) handleKill() (tea.Model, tea.Cmd) {
 // cursor. Worktree sessions get a follow-up sub-confirmation later in the
 // delete flow.
 func (m Model) handleDelete() (tea.Model, tea.Cmd) {
-	pageSessions := m.getPageSessions()
+	pageSessions := m.getDisplaySessions()
 	if len(pageSessions) > 0 && m.cursor < len(pageSessions) {
 		sess := pageSessions[m.cursor]
 		if m.deletingIDs[sess.ID] {
@@ -807,7 +740,7 @@ func (m Model) handleRefresh() (tea.Model, tea.Cmd) {
 
 // handleVscode launches VS Code for the cursor session's working directory.
 func (m Model) handleVscode() (tea.Model, tea.Cmd) {
-	pageSessions := m.getPageSessions()
+	pageSessions := m.getDisplaySessions()
 	if len(pageSessions) > 0 && m.cursor < len(pageSessions) {
 		sess := pageSessions[m.cursor]
 		if m.deletingIDs[sess.ID] {
@@ -1096,66 +1029,6 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Search mode key handling
-		if m.searching {
-			switch msg.String() {
-			case "esc":
-				m.searching = false
-				m.searchInput.Reset()
-				m.filteredSessions = nil
-				m.cursor = 0
-				m.writeCursorEnv()
-				m.scrollOffset = 0
-				return m, nil
-
-			case "up":
-				if m.cursor > 0 {
-					m.cursor--
-					m.skipDeletingSessions(-1)
-				}
-				m.adjustScrollForCursor()
-				m.writeCursorEnv()
-				return m, nil
-
-			case "down":
-				pageSessions := m.getPageSessions()
-				if m.cursor < len(pageSessions)-1 {
-					m.cursor++
-					m.skipDeletingSessions(1)
-				}
-				m.adjustScrollForCursor()
-				m.writeCursorEnv()
-				return m, nil
-
-			case "enter":
-				return m.handleSelectSession()
-
-			case "pgup", "left":
-				m.scrollOffset -= m.pageScrollLines()
-				m.clampScroll()
-				m.writeCursorEnv()
-				return m, nil
-
-			case "pgdown", "right":
-				m.scrollOffset += m.pageScrollLines()
-				m.clampScroll()
-				m.writeCursorEnv()
-				return m, nil
-			}
-
-			// All other keys go to textinput
-			var cmd tea.Cmd
-			oldQuery := m.searchInput.Value()
-			m.searchInput, cmd = m.searchInput.Update(msg)
-			if m.searchInput.Value() != oldQuery {
-				m.applySearchFilter()
-				m.cursor = 0
-				m.writeCursorEnv()
-				m.scrollOffset = 0
-			}
-			return m, cmd
-		}
-
 		// Left pane key handling
 		switch {
 		case key.Matches(msg, m.keys.Quit):
@@ -1171,7 +1044,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keys.Down):
-			pageSessions := m.getPageSessions()
+			pageSessions := m.getDisplaySessions()
 			if m.cursor < len(pageSessions)-1 {
 				m.cursor++
 				m.skipDeletingSessions(1)
@@ -1182,16 +1055,6 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keys.Enter):
 			return m.handleSelectSession()
-
-		case key.Matches(msg, m.keys.Search):
-			m.searching = true
-			m.searchInput.Reset()
-			m.searchInput.Focus()
-			m.filteredSessions = m.sessions
-			m.cursor = 0
-			m.writeCursorEnv()
-			m.scrollOffset = 0
-			return m, textinput.Blink
 
 		case key.Matches(msg, m.keys.New):
 			return m.handleNew()
@@ -1228,7 +1091,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keys.End):
-			pageSessions := m.getPageSessions()
+			pageSessions := m.getDisplaySessions()
 			if len(pageSessions) > 0 {
 				m.cursor = len(pageSessions) - 1
 				m.skipDeletingSessions(-1)
@@ -1247,11 +1110,6 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionsMsg:
 		m.sessions = msg
 		m.err = nil
-
-		// Re-apply search filter if active
-		if m.searching {
-			m.applySearchFilter()
-		}
 
 		// Check if any deleting sessions have been removed (deletion completed)
 		deleteCompleted := false
@@ -1284,11 +1142,6 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Focus on newly created session + switch right pane
 		if m.focusSessionID != "" {
-			// Clear search to show the newly created session
-			m.searching = false
-			m.searchInput.Reset()
-			m.filteredSessions = nil
-
 			for i, s := range m.sessions {
 				if s.ID == m.focusSessionID {
 					m.cursor = i
@@ -1317,7 +1170,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.detachInnerClient()
 				m.displayLocalAttach = false
 			}
-			pageSessions := m.getPageSessions()
+			pageSessions := m.getDisplaySessions()
 			if len(pageSessions) > 0 && m.cursor < len(pageSessions) {
 				sess := pageSessions[m.cursor]
 				if !m.deletingIDs[sess.ID] {
@@ -1353,7 +1206,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if !found {
 				m.currentSessionID = ""
-				pageSessions := m.getPageSessions()
+				pageSessions := m.getDisplaySessions()
 				if len(pageSessions) > 0 && m.cursor < len(pageSessions) {
 					m.switchToSession(pageSessions[m.cursor].ID)
 				} else {
@@ -1363,7 +1216,7 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Auto-display first session on initial load
 		if m.currentSessionID == "" {
-			pageSessions := m.getPageSessions()
+			pageSessions := m.getDisplaySessions()
 			if len(pageSessions) > 0 && m.cursor < len(pageSessions) {
 				m.switchToSession(pageSessions[m.cursor].ID)
 			}
@@ -1418,18 +1271,20 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return v
 			}
 
-			if id := consume("JIN_CREATED_SESSION"); id != "" {
-				m.focusSessionID = id
+			// Any popup that wants the parent TUI to focus a session pushes
+			// the ID here. JIN_CREATED_SESSION (create popup), JIN_NOTIFY_SESSION
+			// (notification history), JIN_FOCUS_SESSION (session-filter-popup)
+			// all share the same downstream (switchToSession) via focusSessionID.
+			for _, k := range []string{"JIN_CREATED_SESSION", "JIN_NOTIFY_SESSION", "JIN_FOCUS_SESSION"} {
+				if id := consume(k); id != "" {
+					m.focusSessionID = id
+				}
 			}
 			// Non-fatal warning from the create popup (e.g. hook not
 			// allowlisted). Read alongside JIN_CREATED_SESSION so it
 			// surfaces on the same tick.
 			if w := consume("JIN_CREATED_WARNING"); w != "" {
 				m.warning = w
-			}
-			// Poll for session selected from notification history popup
-			if id := consume("JIN_NOTIFY_SESSION"); id != "" {
-				m.focusSessionID = id
 			}
 			// Poll for an action ID pushed by the action-popup, then route
 			// through dispatchAction so palette and direct-key paths share
@@ -1499,7 +1354,7 @@ func (m *Model) skipDeletingSessions(dir int) {
 	if len(m.deletingIDs) == 0 {
 		return
 	}
-	pageSessions := m.getPageSessions()
+	pageSessions := m.getDisplaySessions()
 	for m.cursor >= 0 && m.cursor < len(pageSessions) && m.deletingIDs[pageSessions[m.cursor].ID] {
 		m.cursor += dir
 	}
@@ -1579,7 +1434,7 @@ func (m Model) renderDeleteConfirm() string {
 //
 //	[STATS row]        <- fixed header (top of pane, not scrolled)
 //	[blank spacer]     <- fixed header
-//	[search / err / warn ...]
+//	[err / warn ...]
 //	[scrollable card area]  <- windowed by m.scrollOffset
 //
 // The "sessions" title is rendered on the tmux pane-border above via the
@@ -1596,13 +1451,6 @@ func (m Model) renderListContent(contentWidth int) string {
 	}
 	content.WriteString("\n")
 
-	if m.searching {
-		matchCount := len(m.getDisplaySessions())
-		content.WriteString("/")
-		content.WriteString(m.searchInput.View())
-		content.WriteString(helpStyle.Render(fmt.Sprintf(" (%d)", matchCount)))
-		content.WriteString("\n")
-	}
 	if m.err != nil {
 		content.WriteString(lipgloss.NewStyle().Foreground(errorColor).Render(fmt.Sprintf("Error: %v", m.err)))
 		content.WriteString("\n\n")
@@ -1616,11 +1464,7 @@ func (m Model) renderListContent(contentWidth int) string {
 	displaySessions := m.getDisplaySessions()
 	if len(displaySessions) == 0 {
 		content.WriteString("\n")
-		if m.searching {
-			content.WriteString(helpStyle.Render("No matching sessions."))
-		} else {
-			content.WriteString(helpStyle.Render("No sessions. Press 'n' to create one."))
-		}
+		content.WriteString(helpStyle.Render("No sessions. Press 'n' to create one."))
 		content.WriteString("\n")
 		return content.String()
 	}
@@ -1672,10 +1516,7 @@ func (m Model) renderHelpLine() string {
 		confirmMsg := fmt.Sprintf(" Kill '%s'? y:yes n:no", name)
 		return lipgloss.NewStyle().Foreground(warningColor).Bold(true).Render(confirmMsg)
 	}
-	if m.searching {
-		return helpStyle.Render(" Esc:clear  Enter:select  ↑↓:navigate")
-	}
-	return helpStyle.Render(" ? help  / search")
+	return helpStyle.Render(" ? help")
 }
 
 // renderSession renders a single session as a card.
