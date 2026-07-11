@@ -1359,6 +1359,75 @@ func TestEnvTickConsume_FocusSession_EmptyIsNoOp(t *testing.T) {
 	}
 }
 
+// resolveFocusSession is the shared fast/slow path helper. These tests pin
+// the three branches the envTick fast path and the sessionsMsg slow path
+// both depend on: no-op when nothing is pending, cursor-align + clear on
+// hit, and preserve focusSessionID on miss so the caller can retry (fast
+// path) or explicitly give up (slow path).
+
+func TestResolveFocusSession_EmptyID_ReturnsTrue(t *testing.T) {
+	m := &Model{
+		sessions: []session.Info{{ID: "a"}, {ID: "b"}},
+		cursor:   1,
+	}
+	if !m.resolveFocusSession() {
+		t.Errorf("resolveFocusSession() = false, want true (nothing pending)")
+	}
+	// Cursor must not move on the no-op path — the helper is called from
+	// envTick every 250ms and any drift would silently scroll the list.
+	if m.cursor != 1 {
+		t.Errorf("cursor = %d, want 1 (unchanged)", m.cursor)
+	}
+}
+
+func TestResolveFocusSession_TargetInSessions_Switches(t *testing.T) {
+	m := &Model{
+		sessions:         []session.Info{{ID: "a"}, {ID: "b"}, {ID: "c"}},
+		focusSessionID:   "b",
+		cursor:           0,
+		currentSessionID: "a",
+	}
+	if !m.resolveFocusSession() {
+		t.Fatalf("resolveFocusSession() = false, want true (target present)")
+	}
+	if m.cursor != 1 {
+		t.Errorf("cursor = %d, want 1 (aligned to target index)", m.cursor)
+	}
+	if m.focusSessionID != "" {
+		t.Errorf("focusSessionID = %q, want \"\" (cleared on hit)", m.focusSessionID)
+	}
+	// tmuxClient is nil in this test, so switchToSession is a no-op and
+	// currentSessionID stays as the forced-reset value. Pin the reset so a
+	// future refactor cannot silently drop it.
+	if m.currentSessionID != "" {
+		t.Errorf("currentSessionID = %q, want \"\" (forced reset before switch)", m.currentSessionID)
+	}
+}
+
+func TestResolveFocusSession_TargetMissing_ReturnsFalse(t *testing.T) {
+	m := &Model{
+		sessions: []session.Info{
+			{ID: "a"},
+			{ID: "b"},
+		},
+		focusSessionID:   "ghost",
+		cursor:           1,
+		currentSessionID: "b",
+	}
+	if m.resolveFocusSession() {
+		t.Errorf("resolveFocusSession() = true, want false (target absent)")
+	}
+	if m.focusSessionID != "ghost" {
+		t.Errorf("focusSessionID = %q, want \"ghost\" (retained for retry)", m.focusSessionID)
+	}
+	if m.cursor != 1 {
+		t.Errorf("cursor = %d, want 1 (unchanged on miss)", m.cursor)
+	}
+	if m.currentSessionID != "b" {
+		t.Errorf("currentSessionID = %q, want \"b\" (unchanged on miss)", m.currentSessionID)
+	}
+}
+
 func TestSessionTickInterval(t *testing.T) {
 	if sessionTickInterval != 2*time.Second {
 		t.Errorf("sessionTickInterval = %v, want 2s", sessionTickInterval)

@@ -438,6 +438,32 @@ func sessionTickCmd() tea.Cmd {
 // after tmux pane operations (ZoomPane).
 type resizeSettledMsg struct{}
 
+// resolveFocusSession completes a pending focus switch. Returns true if
+// nothing was pending or the target was found and switched (clearing
+// focusSessionID + refreshing JIN_CURSOR_SESSION). Returns false with
+// focusSessionID retained if the target is not yet in m.sessions; callers
+// decide whether to keep it armed for retry (envTick fast path) or clear
+// and give up (sessionsMsg slow path, already ran against a fresh List).
+func (m *Model) resolveFocusSession() bool {
+	if m.focusSessionID == "" {
+		return true
+	}
+	displaySessions := m.getDisplaySessions()
+	i := slices.IndexFunc(displaySessions, func(s session.Info) bool {
+		return s.ID == m.focusSessionID
+	})
+	if i < 0 {
+		return false
+	}
+	m.cursor = i
+	m.adjustScrollForCursor()
+	m.currentSessionID = "" // Force reset so switchToSession runs even when the cursor was already on this session.
+	m.switchToSession(displaySessions[i].ID)
+	m.focusSessionID = ""
+	m.writeCursorEnv()
+	return true
+}
+
 // switchToSession displays the given session in the right pane via RespawnPane.
 // For local sessions, attaches to the inner tmux session (-L jin).
 // For remote sessions, runs SSH attach command.
@@ -1140,19 +1166,15 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Focus on newly created session + switch right pane
+		// Focus on newly created session + switch right pane. Slow path:
+		// even after a fresh List we may still miss (target killed between
+		// popup selection and this frame); in that case clear the pending
+		// target so subsequent ticks don't spin on a ghost ID.
 		if m.focusSessionID != "" {
-			for i, s := range m.sessions {
-				if s.ID == m.focusSessionID {
-					m.cursor = i
-					m.adjustScrollForCursor()
-					m.currentSessionID = "" // Force reset to execute switchToSession
-					m.switchToSession(s.ID)
-					break
-				}
+			if !m.resolveFocusSession() {
+				m.focusSessionID = ""
+				m.writeCursorEnv()
 			}
-			m.focusSessionID = ""
-			m.writeCursorEnv()
 			return m, nil
 		}
 		displaySessions := m.getDisplaySessions()
@@ -1279,6 +1301,13 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if id := consume(k); id != "" {
 					m.focusSessionID = id
 				}
+			}
+			// Fast path: resolve now, or kick a fetch so the sessionsMsg slow
+			// path resolves on the next round-trip instead of after the next
+			// sessionTick (~2s). JIN_CREATED_WARNING / JIN_ACTION_ID stay in
+			// tmux env and surface on the next envTick.
+			if !m.resolveFocusSession() {
+				return m, tea.Batch(envTickCmd(), m.fetchSessions)
 			}
 			// Non-fatal warning from the create popup (e.g. hook not
 			// allowlisted). Read alongside JIN_CREATED_SESSION so it
