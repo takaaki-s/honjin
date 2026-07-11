@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -192,6 +193,11 @@ type Model struct {
 	// Reswitch after delete/kill
 	needsReswitch bool // Reconnect to session at cursor after delete/kill
 
+	// Align cursor to the restored currentSessionID on the first sessionsMsg
+	// after TUI restart. Cleared after the first attempt so subsequent user
+	// cursor movements are preserved across polls.
+	pendingCursorRestore bool
+
 	// Processing indicator
 	processingMsg    string // Processing message (overlay displayed when non-empty)
 	waitingForResize bool   // Waiting for WindowSizeMsg (resize completion after ZoomPane)
@@ -247,6 +253,10 @@ func NewModelWithTmux(client *daemon.Client, tc, innerTC *tmux.Client, tuiPaneID
 	m.displayPaneID = displayPaneID
 	// Restore which session was displayed (for reattach)
 	m.currentSessionID = tc.GetEnvironment(tmux.SessionName, "JIN_CURRENT_SESSION")
+	// Point the cursor at that restored session on the first sessionsMsg so
+	// relaunching the TUI keeps the left-list selection aligned with the
+	// right pane the user was looking at.
+	m.pendingCursorRestore = m.currentSessionID != ""
 	// Reset JIN_CURSOR_SESSION at startup — sessions have not been fetched
 	// yet, so publish an empty value so a stale env from a prior TUI run does
 	// not confuse a popup that opens before the first sessionsMsg arrives.
@@ -1255,6 +1265,20 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 					delete(m.deletingIDs, id)
 					deleteCompleted = true
 				}
+			}
+		}
+
+		// Align cursor to the session restored from JIN_CURRENT_SESSION so a
+		// relaunched TUI selects whatever the right pane is showing. Runs once
+		// per TUI startup (armed in NewModelWithTmux only when currentSessionID
+		// is non-empty); if the target no longer exists between runs, IndexFunc
+		// returns -1 and the cursor keeps its default.
+		if m.pendingCursorRestore {
+			m.pendingCursorRestore = false
+			if i := slices.IndexFunc(m.getDisplaySessions(), func(s session.Info) bool {
+				return s.ID == m.currentSessionID
+			}); i >= 0 {
+				m.cursor = i
 			}
 		}
 
