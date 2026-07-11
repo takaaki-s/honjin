@@ -438,6 +438,39 @@ func sessionTickCmd() tea.Cmd {
 // after tmux pane operations (ZoomPane).
 type resizeSettledMsg struct{}
 
+// resolveFocusSession attempts to complete a pending focus switch (a session
+// ID pushed by any *_SESSION popup and copied into m.focusSessionID). Returns
+// true when there was nothing pending, or when the target was found in the
+// current m.sessions snapshot and switchToSession was fired; in that case
+// focusSessionID is cleared and JIN_CURSOR_SESSION is refreshed. Returns false
+// when focusSessionID is still set but the target has not yet appeared in
+// m.sessions — the caller (envTick fast path) is expected to kick a fetch so
+// the sessionsMsg branch can retry via the slow path.
+//
+// The clear-on-success semantics are asymmetric with the sessionsMsg caller,
+// which unconditionally clears focusSessionID even on miss (giving up after a
+// fresh List). This asymmetry is intentional: envTick may run before the
+// fetch has landed and must keep the target armed for retry, whereas
+// sessionsMsg has already observed a fresh snapshot and further retries
+// would spin.
+func (m *Model) resolveFocusSession() bool {
+	if m.focusSessionID == "" {
+		return true
+	}
+	for i, s := range m.sessions {
+		if s.ID == m.focusSessionID {
+			m.cursor = i
+			m.adjustScrollForCursor()
+			m.currentSessionID = "" // Force reset so switchToSession runs even when the cursor was already on this session.
+			m.switchToSession(s.ID)
+			m.focusSessionID = ""
+			m.writeCursorEnv()
+			return true
+		}
+	}
+	return false
+}
+
 // switchToSession displays the given session in the right pane via RespawnPane.
 // For local sessions, attaches to the inner tmux session (-L jin).
 // For remote sessions, runs SSH attach command.
@@ -1140,19 +1173,15 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Focus on newly created session + switch right pane
+		// Focus on newly created session + switch right pane. Slow path:
+		// even after a fresh List we may still miss (target killed between
+		// popup selection and this frame); in that case clear the pending
+		// target so subsequent ticks don't spin on a ghost ID.
 		if m.focusSessionID != "" {
-			for i, s := range m.sessions {
-				if s.ID == m.focusSessionID {
-					m.cursor = i
-					m.adjustScrollForCursor()
-					m.currentSessionID = "" // Force reset to execute switchToSession
-					m.switchToSession(s.ID)
-					break
-				}
+			if !m.resolveFocusSession() {
+				m.focusSessionID = ""
+				m.writeCursorEnv()
 			}
-			m.focusSessionID = ""
-			m.writeCursorEnv()
 			return m, nil
 		}
 		displaySessions := m.getDisplaySessions()
@@ -1279,6 +1308,17 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if id := consume(k); id != "" {
 					m.focusSessionID = id
 				}
+			}
+			// Fast path: complete the focus switch here without waiting for
+			// the next sessionTick (~2s). If the target is not yet in the
+			// snapshot (JIN_CREATED_SESSION for a freshly created session),
+			// keep it armed and kick an immediate fetch so the sessionsMsg
+			// slow path resolves on the same round-trip. JIN_CREATED_WARNING
+			// and JIN_ACTION_ID may co-occur only across popups (create vs.
+			// action popup), so skipping their consume for one 250ms tick on
+			// the miss branch is benign — they surface on the next tick.
+			if !m.resolveFocusSession() {
+				return m, tea.Batch(envTickCmd(), m.fetchSessions)
 			}
 			// Non-fatal warning from the create popup (e.g. hook not
 			// allowlisted). Read alongside JIN_CREATED_SESSION so it
