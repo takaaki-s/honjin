@@ -1198,6 +1198,51 @@ func TestDeleteConfirmMoveCursorToNextSession(t *testing.T) {
 	})
 }
 
+// --- pendingCursorRestore ---
+
+// TestPendingCursorRestore covers the "quit-then-relaunch keeps the cursor on
+// the right-pane session" flow. NewModelWithTmux arms the flag from the
+// restored JIN_CURRENT_SESSION; the first sessionsMsg after startup consumes
+// it and slides the cursor onto the matching row. The flag is always cleared
+// after the first sessionsMsg (checked once at the bottom, not per case).
+func TestPendingCursorRestore(t *testing.T) {
+	msg := sessionsMsg([]session.Info{
+		{ID: "a", Description: "a"},
+		{ID: "b", Description: "b"},
+		{ID: "c", Description: "c"},
+	})
+	tests := []struct {
+		name             string
+		cursor           int
+		currentSessionID string
+		pending          bool
+		wantCursor       int
+	}{
+		{"lands on the restored right-pane session", 0, "b", true, 1},
+		{"flag clears when the restored session is gone", 0, "gone", true, 0},
+		{"consumed flag does not clobber user cursor movement", 2, "b", false, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := Model{
+				cursor:               tt.cursor,
+				deletingIDs:          make(map[string]bool),
+				height:               100,
+				currentSessionID:     tt.currentSessionID,
+				pendingCursorRestore: tt.pending,
+			}
+			result, _ := m.updateListMode(msg)
+			rm := result.(Model)
+			if rm.cursor != tt.wantCursor {
+				t.Errorf("cursor = %d, want %d", rm.cursor, tt.wantCursor)
+			}
+			if rm.pendingCursorRestore {
+				t.Error("pendingCursorRestore should be cleared after sessionsMsg")
+			}
+		})
+	}
+}
+
 // --- renderSession ---
 
 // TestRenderSession_Indicators verifies the two orthogonal indicators:
