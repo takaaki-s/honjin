@@ -68,7 +68,7 @@ func TestHelpModel_View(t *testing.T) {
 	// Verify keybinding labels are rendered (the Help().Desc values)
 	expectedLabels := []string{
 		"up", "down", "attach", "new session", "kill", "delete",
-		"refresh", "quit", "help", "notifications",
+		"refresh", "quit", "help",
 	}
 	for _, label := range expectedLabels {
 		if !strings.Contains(view, label) {

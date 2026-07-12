@@ -70,7 +70,7 @@ matched-field list.
 Every popup opened by jind-ai has its width and height resolved from a
 single config schema. Two delivery paths carry the resolved size to tmux:
 
-**Core popups** (`create`, `notify`, `session_filter`, `help`, `action`):
+**Core popups** (`create`, `session_filter`, `help`, `action`):
 
 ```
 Model.openPopup(name)                  cmd/jin/cmd/tui.go
@@ -125,7 +125,7 @@ Claude Code (hook event)
       → daemon.Server.handleHook()
         → session.Manager.HandleHookEvent()
           → agent.StatusSource.Interpret()  ── adapter-owned event→status mapping
-          → Session.Status update + Store.Save + notify
+          → Session.Status update + Store.Save + plugin dispatch (see below)
 ```
 
 The event vocabulary (which hook name means what status) lives entirely in
@@ -254,9 +254,9 @@ The `Name` field was retired in favour of `Description` + `DescriptionLocked`. E
 cmd/jin/cmd/       → daemon (client), config, session (types only), tui, tmux, plugin,
                        _ agent/register (blank import so kinds are registered)
                       │
-daemon/            → session, config, notify, tmux, agent (registry Lookup), plugin
+daemon/            → session, config, tmux, agent (registry Lookup), plugin
                       │
-session/           → config, tmux, notify, transcript, plugin (Dispatcher seam only)
+session/           → config, tmux, transcript, plugin (Dispatcher seam only)
                       │
 agent/             → session (borrows Agent + supporting types via aliases)
 agent/claude/      → agent, session, transcript, debug   (CC-specific adapter)
@@ -269,7 +269,6 @@ tui/               → daemon (client), config, session (Info type)
                       │
 config/            → (external: viper)
 tmux/              → (external: tmux CLI)
-notify/            → (external: OS notification)
 transcript/        → (file I/O: ~/.claude/projects/)
 paths/             → (XDG dirs: config/state/data/runtime)
 ```

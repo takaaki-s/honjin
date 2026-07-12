@@ -30,21 +30,20 @@ const minTUIWidth = 30
 
 // KeyMap defines key bindings
 type KeyMap struct {
-	Up            key.Binding
-	Down          key.Binding
-	Enter         key.Binding
-	New           key.Binding
-	Kill          key.Binding
-	Delete        key.Binding
-	Refresh       key.Binding
-	Quit          key.Binding
-	Help          key.Binding
-	PrevPage      key.Binding // Scroll one screen up (viewport)
-	NextPage      key.Binding // Scroll one screen down (viewport)
-	Home          key.Binding // Jump to first session
-	End           key.Binding // Jump to last session
-	Vscode        key.Binding
-	Notifications key.Binding
+	Up       key.Binding
+	Down     key.Binding
+	Enter    key.Binding
+	New      key.Binding
+	Kill     key.Binding
+	Delete   key.Binding
+	Refresh  key.Binding
+	Quit     key.Binding
+	Help     key.Binding
+	PrevPage key.Binding // Scroll one screen up (viewport)
+	NextPage key.Binding // Scroll one screen down (viewport)
+	Home     key.Binding // Jump to first session
+	End      key.Binding // Jump to last session
+	Vscode   key.Binding
 
 	// Session creation form
 	NextField  key.Binding
@@ -111,10 +110,6 @@ func NewKeyMap(cfg config.KeybindingsConfig) KeyMap {
 		Vscode: key.NewBinding(
 			key.WithKeys(cfg.Vscode...),
 			key.WithHelp(strings.Join(cfg.Vscode, "/"), "open vscode"),
-		),
-		Notifications: key.NewBinding(
-			key.WithKeys(cfg.Notifications...),
-			key.WithHelp(strings.Join(cfg.Notifications, "/"), "notifications"),
 		),
 		NextField: key.NewBinding(
 			key.WithKeys(cfg.NextField...),
@@ -797,12 +792,6 @@ func (m Model) handleVscode() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleNotifications opens the notification-history popup.
-func (m Model) handleNotifications() (tea.Model, tea.Cmd) {
-	m.openPopup(config.PopupNotify, " Notifications ")
-	return m, nil
-}
-
 // handleSessionFilter opens the session filter popup — the same popup
 // bound at the outer-tmux root key table via keybindings.search. Wired
 // here so the action palette can launch it without depending on the
@@ -843,8 +832,6 @@ func (m Model) dispatchAction(id string) (tea.Model, tea.Cmd) {
 		return m.handleRefresh()
 	case action.IDVscode:
 		return m.handleVscode()
-	case action.IDNotifications:
-		return m.handleNotifications()
 	case action.IDHelp:
 		return m.handleHelp()
 	case action.IDTogglePane:
@@ -1143,9 +1130,6 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keys.Vscode):
 			return m.handleVscode()
-
-		case key.Matches(msg, m.keys.Notifications):
-			return m.handleNotifications()
 		}
 
 	case sessionsMsg:
@@ -1310,8 +1294,9 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Any popup that wants the parent TUI to focus a session pushes
 			// the ID here. JIN_CREATED_SESSION (create popup), JIN_NOTIFY_SESSION
-			// (notification history), JIN_FOCUS_SESSION (session-filter-popup)
-			// all share the same downstream (switchToSession) via focusSessionID.
+			// (external notifier plugin via jin session focus), JIN_FOCUS_SESSION
+			// (session-filter-popup) all share the same downstream (switchToSession)
+			// via focusSessionID.
 			for _, k := range []string{"JIN_CREATED_SESSION", "JIN_NOTIFY_SESSION", "JIN_FOCUS_SESSION"} {
 				if id := consume(k); id != "" {
 					m.focusSessionID = id

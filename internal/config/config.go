@@ -29,18 +29,17 @@ func ValidateDetachKey(key string) error {
 // KeybindingsConfig represents keybinding settings
 type KeybindingsConfig struct {
 	// Session list screen
-	Up            []string `mapstructure:"up,omitempty"`
-	Down          []string `mapstructure:"down,omitempty"`
-	Attach        []string `mapstructure:"attach,omitempty"`
-	New           []string `mapstructure:"new,omitempty"`
-	Kill          []string `mapstructure:"kill,omitempty"`
-	Delete        []string `mapstructure:"delete,omitempty"`
-	Refresh       []string `mapstructure:"refresh,omitempty"`
-	Quit          []string `mapstructure:"quit,omitempty"`
-	Help          []string `mapstructure:"help,omitempty"`
-	Search        []string `mapstructure:"search,omitempty"`
-	Vscode        []string `mapstructure:"vscode,omitempty"`
-	Notifications []string `mapstructure:"notifications,omitempty"`
+	Up      []string `mapstructure:"up,omitempty"`
+	Down    []string `mapstructure:"down,omitempty"`
+	Attach  []string `mapstructure:"attach,omitempty"`
+	New     []string `mapstructure:"new,omitempty"`
+	Kill    []string `mapstructure:"kill,omitempty"`
+	Delete  []string `mapstructure:"delete,omitempty"`
+	Refresh []string `mapstructure:"refresh,omitempty"`
+	Quit    []string `mapstructure:"quit,omitempty"`
+	Help    []string `mapstructure:"help,omitempty"`
+	Search  []string `mapstructure:"search,omitempty"`
+	Vscode  []string `mapstructure:"vscode,omitempty"`
 
 	// Session creation form
 	NextField  []string `mapstructure:"next_field,omitempty"`
@@ -96,7 +95,6 @@ type PopupSizeConfig struct {
 // to the hardcoded default, but only nil is silent.
 type PopupsConfig struct {
 	Create        *PopupSizeConfig            `mapstructure:"create,omitempty"`
-	Notify        *PopupSizeConfig            `mapstructure:"notify,omitempty"`
 	SessionFilter *PopupSizeConfig            `mapstructure:"session_filter,omitempty"`
 	Help          *PopupSizeConfig            `mapstructure:"help,omitempty"`
 	Action        *PopupSizeConfig            `mapstructure:"action,omitempty"`
@@ -193,7 +191,6 @@ func DefaultPluginsConfig() PluginsConfig {
 // user config key, the default entry, and the subcommand jindaiko spawns.
 const (
 	PopupCreate        = "create"
-	PopupNotify        = "notify"
 	PopupSessionFilter = "session_filter"
 	PopupHelp          = "help"
 	PopupAction        = "action"
@@ -214,7 +211,6 @@ type popupSpec struct {
 // all read from here.
 var popupCatalog = map[string]popupSpec{
 	PopupCreate:        {DefaultSize: PopupSizeConfig{Width: 80, Height: 80}, Subcmd: "create-popup"},
-	PopupNotify:        {DefaultSize: PopupSizeConfig{Width: 70, Height: 60}, Subcmd: "notify-popup"},
 	PopupSessionFilter: {DefaultSize: PopupSizeConfig{Width: 70, Height: 70}, Subcmd: "session-filter-popup"},
 	PopupHelp:          {DefaultSize: PopupSizeConfig{Width: 60, Height: 60}, Subcmd: "help-popup"},
 	PopupAction:        {DefaultSize: PopupSizeConfig{Width: 70, Height: 70}, Subcmd: "action-popup"},
@@ -414,18 +410,17 @@ func (m *Manager) GetDefaultAgent() string {
 func DefaultKeybindings() KeybindingsConfig {
 	return KeybindingsConfig{
 		// Session list screen
-		Up:            []string{"up", "k"},
-		Down:          []string{"down", "j"},
-		Attach:        []string{"enter"},
-		New:           []string{"n"},
-		Kill:          []string{"x"},
-		Delete:        []string{"d"},
-		Refresh:       []string{"r"},
-		Quit:          []string{"q", "ctrl+c"},
-		Help:          []string{"?"},
-		Search:        []string{"M-f"},
-		Vscode:        []string{"v"},
-		Notifications: []string{"!"},
+		Up:      []string{"up", "k"},
+		Down:    []string{"down", "j"},
+		Attach:  []string{"enter"},
+		New:     []string{"n"},
+		Kill:    []string{"x"},
+		Delete:  []string{"d"},
+		Refresh: []string{"r"},
+		Quit:    []string{"q", "ctrl+c"},
+		Help:    []string{"?"},
+		Search:  []string{"M-f"},
+		Vscode:  []string{"v"},
 
 		// Session creation form
 		NextField:  []string{"tab"},
@@ -485,9 +480,6 @@ func (m *Manager) GetKeybindings() KeybindingsConfig {
 	}
 	if len(cfg.Vscode) == 0 {
 		cfg.Vscode = defaults.Vscode
-	}
-	if len(cfg.Notifications) == 0 {
-		cfg.Notifications = defaults.Notifications
 	}
 	if len(cfg.NextField) == 0 {
 		cfg.NextField = defaults.NextField
@@ -697,8 +689,8 @@ func (m *Manager) GetSessionFilterKeys() []string {
 }
 
 // GetPopupSize returns tmux-formatted width/height strings (e.g. "70%") for a
-// canonical core popup name (create / notify / session_filter / help /
-// action). Unknown names fall back to the "default" entry in
+// canonical core popup name (create / session_filter / help / action).
+// Unknown names fall back to the "default" entry in
 // DefaultPopupSizes. Out-of-range user values (<1 or >100) log a warn once
 // per key and fall back to the hardcoded default; a zero value falls back
 // silently.
@@ -739,8 +731,6 @@ func coreUserPopup(p *PopupsConfig, name string) *PopupSizeConfig {
 	switch name {
 	case "create":
 		return p.Create
-	case "notify":
-		return p.Notify
 	case "session_filter":
 		return p.SessionFilter
 	case "help":

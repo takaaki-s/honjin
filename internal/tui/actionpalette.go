@@ -291,7 +291,7 @@ func (m *PaletteModel) clampScroll() {
 }
 
 // visibleLines reserves 5 lines: title (1) + blank (1) + input (1) +
-// help (1) + tail blank (1). Matches the notifyview pattern.
+// help (1) + tail blank (1).
 func (m PaletteModel) visibleLines() int {
 	lines := m.height - 5
 	if lines < 1 {
