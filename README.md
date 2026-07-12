@@ -334,7 +334,6 @@ popups:
   action:         { width: 70, height: 70 }
   plugin_default: { width: 70, height: 70 }
   plugins:                                # per-plugin overrides
-    notifier:     { width: 70, height: 60 }   # recommended for jind-ai-notifier
     # my-notifier:  { width: 40, height: 20 }
 ```
 

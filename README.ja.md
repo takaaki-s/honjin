@@ -293,7 +293,6 @@ popups:
   action:         { width: 70, height: 70 }
   plugin_default: { width: 70, height: 70 }
   plugins:                                # プラグイン単位の上書き
-    notifier:     { width: 70, height: 60 }   # jind-ai-notifier の推奨値
     # my-notifier:  { width: 40, height: 20 }
 ```
 
