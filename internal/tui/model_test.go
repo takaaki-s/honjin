@@ -1486,7 +1486,6 @@ func TestOpenPopup_LooksUpSizeByName(t *testing.T) {
 		wantSubcmd string
 	}{
 		{"create", "create-popup"},
-		{"notify", "notify-popup"},
 		{"session_filter", "session-filter-popup"},
 		{"help", "help-popup"},
 	}

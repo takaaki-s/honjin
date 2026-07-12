@@ -443,7 +443,6 @@ func TestPopupsConfig_YAMLDecode_ParsesFullSchema(t *testing.T) {
 	body := `
 popups:
   create:         { width: 80, height: 80 }
-  notify:         { width: 70, height: 60 }
   session_filter: { width: 65, height: 65 }
   help:           { width: 60, height: 55 }
   action:         { width: 75, height: 75 }
@@ -464,7 +463,6 @@ popups:
 		wantW, wantH int
 	}{
 		{"create", p.Create, 80, 80},
-		{"notify", p.Notify, 70, 60},
 		{"session_filter", p.SessionFilter, 65, 65},
 		{"help", p.Help, 60, 55},
 		{"action", p.Action, 75, 75},
@@ -509,7 +507,7 @@ keybindings:
 		t.Fatalf("NewManager: %v", err)
 	}
 	p := m.Get().Popups
-	if p.Create != nil || p.Notify != nil || p.SessionFilter != nil || p.Help != nil || p.Action != nil {
+	if p.Create != nil || p.SessionFilter != nil || p.Help != nil || p.Action != nil {
 		t.Errorf("expected all Popups core fields nil, got %+v", p)
 	}
 	if p.PluginDefault != nil {
@@ -524,7 +522,7 @@ keybindings:
 
 func TestDefaultPopupSizes_ContainsExpectedKeys(t *testing.T) {
 	sizes := DefaultPopupSizes()
-	wantKeys := []string{"create", "notify", "session_filter", "help", "action", "plugin_default", "default"}
+	wantKeys := []string{"create", "session_filter", "help", "action", "plugin_default", "default"}
 	for _, k := range wantKeys {
 		v, ok := sizes[k]
 		if !ok {
@@ -546,7 +544,6 @@ func TestGetPopupSize_NilReturnsDefault(t *testing.T) {
 		wantW, wantH string
 	}{
 		{"create", "80%", "80%"},
-		{"notify", "70%", "60%"},
 		{"session_filter", "70%", "70%"},
 		{"help", "60%", "60%"},
 		{"action", "70%", "70%"},

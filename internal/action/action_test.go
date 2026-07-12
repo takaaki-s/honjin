@@ -13,7 +13,6 @@ func TestCoreActions_LabelStable(t *testing.T) {
 		IDDelete:        "delete session",
 		IDRefresh:       "refresh list",
 		IDVscode:        "open in vscode",
-		IDNotifications: "notification history",
 		IDHelp:          "shortcuts help",
 		IDSessionFilter: "session filter",
 		IDTogglePane:    "toggle sidebar",
@@ -37,15 +36,14 @@ func TestCoreActions_LabelStable(t *testing.T) {
 
 func TestCoreActions_ShortcutResolution(t *testing.T) {
 	kb := KeyBindings{
-		New:           []string{"n", "N"},
-		Kill:          []string{"x", "X"},
-		Delete:        []string{"d", "D"},
-		Refresh:       []string{"r"},
-		Vscode:        []string{"v"},
-		Notifications: []string{"!"},
-		Help:          []string{"?"},
-		TogglePane:    []string{"M-\\"},
-		Search:        []string{"M-f"},
+		New:        []string{"n", "N"},
+		Kill:       []string{"x", "X"},
+		Delete:     []string{"d", "D"},
+		Refresh:    []string{"r"},
+		Vscode:     []string{"v"},
+		Help:       []string{"?"},
+		TogglePane: []string{"M-\\"},
+		Search:     []string{"M-f"},
 	}
 	want := map[string]string{
 		IDNew:           "n",
@@ -53,7 +51,6 @@ func TestCoreActions_ShortcutResolution(t *testing.T) {
 		IDDelete:        "d",
 		IDRefresh:       "r",
 		IDVscode:        "v",
-		IDNotifications: "!",
 		IDHelp:          "?",
 		IDTogglePane:    "Alt+\\",
 		IDSessionFilter: "Alt+F",
@@ -81,7 +78,6 @@ func TestCoreActions_NeedsSession(t *testing.T) {
 		IDDelete:        true,
 		IDRefresh:       false,
 		IDVscode:        true,
-		IDNotifications: false,
 		IDHelp:          false,
 		IDTogglePane:    false,
 		IDSessionFilter: false,

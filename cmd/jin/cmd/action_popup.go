@@ -83,14 +83,13 @@ func actionKeyBindingsFromConfig(mgr *config.Manager) action.KeyBindings {
 	}
 	kb := mgr.GetKeybindings()
 	return action.KeyBindings{
-		New:           kb.New,
-		Kill:          kb.Kill,
-		Delete:        kb.Delete,
-		Refresh:       kb.Refresh,
-		Vscode:        kb.Vscode,
-		Notifications: kb.Notifications,
-		Help:          kb.Help,
-		TogglePane:    mgr.GetTogglePaneKeys(),
-		Search:        mgr.GetSessionFilterKeys(),
+		New:        kb.New,
+		Kill:       kb.Kill,
+		Delete:     kb.Delete,
+		Refresh:    kb.Refresh,
+		Vscode:     kb.Vscode,
+		Help:       kb.Help,
+		TogglePane: mgr.GetTogglePaneKeys(),
+		Search:     mgr.GetSessionFilterKeys(),
 	}
 }
