@@ -72,7 +72,6 @@ jin (root)
 ├─ cleanup stopped
 ├─ create-popup   (Hidden, for TUI popup)
 ├─ help-popup     (Hidden, for TUI popup)
-├─ notify-popup   (Hidden, for TUI popup)
 └─ (add new commands here)
 ```
 

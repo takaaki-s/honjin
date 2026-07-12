@@ -3,14 +3,13 @@
 ## Architecture
 
 BubbleTea (Elm Architecture) based TUI.
-The main screen (session list) is handled by `model.go`, while the create form, help, notification history, and session filter are launched as independent processes via tmux popup.
+The main screen (session list) is handled by `model.go`, while the create form, help, and session filter are launched as independent processes via tmux popup.
 
 ```
 internal/tui/
 ├─ model.go               ... Main Model (session list), Update(), View() (~1430 lines)
 ├─ createform.go          ... Session create form (for popup, ~540 lines)
 ├─ dirpicker.go           ... Directory picker (used within createform, ~730 lines)
-├─ notifyview.go          ... Notification history view (for popup, ~180 lines)
 ├─ helpview.go            ... Help view (for popup, ~100 lines)
 ├─ session_filter_model.go ... Session filter picker (for popup, sahilm/fuzzy)
 └─ styles.go              ... lipgloss style definitions (Tokyo Night color scheme)
@@ -18,7 +17,6 @@ internal/tui/
 cmd/jin/cmd/
 ├─ create_popup.go          ... jin create-popup (Hidden) → launches CreateFormModel
 ├─ help_popup.go            ... jin help-popup (Hidden)   → launches HelpModel
-├─ notify_popup.go          ... jin notify-popup (Hidden) → launches NotifyModel
 └─ session_filter_popup.go  ... jin session-filter-popup (Hidden) → launches SessionFilterModel
 ```
 
@@ -64,10 +62,9 @@ func (m Model) View() string {
 
 - **Create form**: `CreateFormModel` in `createform.go` (WorkDir → Agent → Fleet → Worktree; Agent step is skipped when only one adapter is registered)
 - **Help**: `HelpModel` in `helpview.go` (keybind list)
-- **Notification history**: `NotifyModel` in `notifyview.go` (notification list + session selection)
 - **Session filter**: `SessionFilterModel` in `session_filter_model.go` (fuzzy session picker, see [Session Filter Popup](#session-filter-popup) below)
 
-After popup completion, results are returned to the parent TUI via environment variables (`JIN_CREATED_SESSION`, `JIN_NOTIFY_SESSION`, `JIN_FOCUS_SESSION`). The parent TUI detects them during tickMsg polling.
+After popup completion, core popups return results to the parent TUI via environment variables (`JIN_CREATED_SESSION`, `JIN_FOCUS_SESSION`). `JIN_NOTIFY_SESSION` is set by `jin session focus` — invoked from external plugins such as `jind-ai-notifier` — and consumed via the same env-tick polling path. The parent TUI detects them during tickMsg polling.
 
 ## Styling
 
@@ -82,7 +79,7 @@ After popup completion, results are returned to the parent TUI via environment v
 3. Use `tea.NewProgram()` inside the popup to run as an independent BubbleTea program
 4. If returning results via environment variables, add detection logic in `model.go`'s `tick()`
 5. Add a keybind for popup launch in `model.go`'s `updateListMode()`
-6. Refer to existing create_popup.go / help_popup.go / notify_popup.go as patterns
+6. Refer to existing create_popup.go / help_popup.go as patterns
 
 ## Keybindings
 
@@ -120,9 +117,9 @@ intentional.
 ## Action Palette
 
 The action palette is a searchable popup that unifies every action a user
-might want to trigger from the TUI: the 9 built-in actions (new / kill /
-delete / refresh / vscode / notifications / help / session filter / toggle
-sidebar) plus any `plugin:*` action from installed plugins, all in one
+might want to trigger from the TUI: the 8 built-in actions (new / kill /
+delete / refresh / vscode / help / session filter / toggle sidebar) plus
+any `plugin:*` action from installed plugins, all in one
 fuzzy-searchable list (via [sahilm/fuzzy](https://github.com/sahilm/fuzzy),
 same engine as the session filter popup — matched runes are underlined in
 the label column). Like `toggle_pane`, it's bound at the outer tmux
@@ -192,7 +189,6 @@ Defaults:
 | Popup name       | Width | Height | Trigger                    |
 |------------------|-------|--------|----------------------------|
 | `create`         | 80    | 80     | `keybindings.new`          |
-| `notify`         | 70    | 60     | `keybindings.notifications`|
 | `session_filter` | 70    | 70     | `keybindings.search`       |
 | `help`           | 60    | 60     | `keybindings.help`         |
 | `action`         | 70    | 70     | `keybindings.action_panel` |
@@ -203,7 +199,6 @@ Override in `~/.config/jind-ai/config.yaml`:
 ```yaml
 popups:
   create:         { width: 90, height: 90 }
-  notify:         { width: 40, height: 20 }
   session_filter: { width: 80, height: 80 }
   help:           { width: 60, height: 60 }
   action:         { width: 70, height: 70 }
@@ -214,7 +209,7 @@ popups:
 
 Two delivery paths for the resolved size:
 
-- **Inner path** (BubbleTea → `tmuxClient.DisplayPopup`): `create`, `notify`,
+- **Inner path** (BubbleTea → `tmuxClient.DisplayPopup`): `create`,
   `session_filter`, `help` are opened from inside the TUI on each keypress.
   Config changes take effect the next time the popup opens — no TUI restart
   needed.

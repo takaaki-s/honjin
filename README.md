@@ -40,7 +40,7 @@ jin ui --agent codex   # transient default; ends when TUI exits
 - **Attach/Detach**: Quickly switch between sessions (`Ctrl+]` to detach)
 - **Real-time status tracking**: Live display of working directory, branch, and latest message
 - **Session filter & Paging**: `/` opens a fuzzy-search popup over session name, directory, branch, fleet, and agent kind
-- **Desktop notifications**: OS notifications for permission requests and task completion (macOS / Linux)
+- **Plugins**: Run your own shell-executable plugins on session status changes or on demand — for example, desktop notifications via `jin plugin install github.com/takaaki-s/jind-ai-notifier`
 
 ## Installation
 
@@ -309,7 +309,6 @@ keybindings:
                           # Use ["/"] to restore the pre-M-f bare-slash key
                           # (breaks agent slash-commands in the display pane).
   vscode: ["v"]
-  notifications: ["!"]
   quit: ["q", "ctrl+c"]
   help: ["?"]
   # Session creation form
@@ -330,13 +329,13 @@ keybindings:
 # See docs/tui-guide.md#popup-sizes for the full table and delivery paths.
 popups:
   create:         { width: 80, height: 80 }
-  notify:         { width: 70, height: 60 }
   session_filter: { width: 70, height: 70 }
   help:           { width: 60, height: 60 }
   action:         { width: 70, height: 70 }
   plugin_default: { width: 70, height: 70 }
-  # plugins:                                # per-plugin overrides
-  #   my-notifier:  { width: 40, height: 20 }
+  plugins:                                # per-plugin overrides
+    notifier:     { width: 70, height: 60 }   # recommended for jind-ai-notifier
+    # my-notifier:  { width: 40, height: 20 }
 ```
 
 ### Worktree placement
@@ -403,7 +402,6 @@ Worktree creation itself is **offline** — the new branch is cut from your loca
 | `d` | Delete session |
 | `r` | Refresh list |
 | `v` | Open in VS Code |
-| `!` | Notification history |
 | `?` | Show help |
 | `q` | Quit |
 
@@ -485,8 +483,8 @@ When a session starts, jind-ai generates `$XDG_STATE_HOME/jind-ai/hooks-settings
 |-----------|------|
 | `UserPromptSubmit` | User submits a prompt → set session to `thinking` |
 | `PostToolUse` | Tool execution ends → set session to `thinking` (recovers from `permission` state) |
-| `Stop` | Claude's turn ends → set session to `idle` (send task completion notification) |
-| `Notification` | Permission request, etc. → set session to `permission` (send permission request notification) |
+| `Stop` | Claude's turn ends → set session to `idle` (dispatches a task-complete `JIN_NOTIFY_KIND` to plugins) |
+| `Notification` | Permission request, etc. → set session to `permission` (dispatches a permission `JIN_NOTIFY_KIND` to plugins) |
 
 ## Worktree Post-Create Hook
 

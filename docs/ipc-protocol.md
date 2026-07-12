@@ -36,7 +36,6 @@ type Response struct {
 | `delete` | `DeleteRequest` | Delete session (optionally with worktree) |
 | `stop` | (none) | Stop daemon |
 | `hook` | `HookRequest` | Claude Code hook event |
-| `notification-history` | (none) | Get notification history |
 | `result` | `ResultRequest` | Fetch structured transcript entries (orchestration) |
 | `set-description` | `SetDescriptionRequest` | Update session description (empty resets to auto-generated) |
 | `agent-signal` | `AgentSignalRequest` | Deliver an out-of-band status signal from an agent adapter (currently only `kind="hook"` is wired) |

@@ -96,8 +96,8 @@ Common pitfalls and caveats that agents tend to fall into.
   [architecture.md](architecture.md#session-filter-popup)), not a bug.
 
 - **Requires tmux `display-popup` (tmux 3.2+).** The session filter shares
-  its launch mechanism with the action palette and notification history
-  popups — all three call `tmux display-popup -E`. On tmux 3.1 or older,
+  its launch mechanism with the action palette popup — both call
+  `tmux display-popup -E`. On tmux 3.1 or older,
   `display-popup` doesn't exist, so the outer-tmux `bind-key` for `/` fires
   but the popup command errors out instead of opening. jind-ai's documented
   minimum is tmux 3.3+ (see README's Requirements section), which already
@@ -136,7 +136,7 @@ Common pitfalls and caveats that agents tend to fall into.
   in `cmd/jin/cmd/tui.go`). Changing `popups.action` or `popups.session_filter`
   in config takes effect only after `jin ui` re-runs and re-issues the
   `bind-key` command. Inner popups (opened from inside the BubbleTea update
-  loop — `create`, `notify`, `help`, and the palette-launched
+  loop — `create`, `help`, and the palette-launched
   `session_filter`) read config on each open, so they don't need a restart.
 
 - **Popup sizes are percent-only**. `popups.<name>.width` / `.height` are
