@@ -126,3 +126,27 @@ Common pitfalls and caveats that agents tend to fall into.
 
 - **I/O operations should be performed outside the lock** (to prevent deadlocks).
   Refer to the `List()` pattern: take a snapshot under RLock → release lock → read transcripts
+
+## Popup Sizes
+
+- **Outer-tmux bind-key popups need a `jin ui` restart** to pick up config
+  changes. `action` (default `M-p`) and `session_filter` (default `M-f`) are
+  bound at outer tmux (`jin-mgr`) root with hardcoded `-w`/`-h` args written
+  once at TUI startup (`applyActionPanelBinding` / `applySessionFilterBinding`
+  in `cmd/jin/cmd/tui.go`). Changing `popups.action` or `popups.session_filter`
+  in config takes effect only after `jin ui` re-runs and re-issues the
+  `bind-key` command. Inner popups (opened from inside the BubbleTea update
+  loop — `create`, `notify`, `help`, and the palette-launched
+  `session_filter`) read config on each open, so they don't need a restart.
+
+- **Popup sizes are percent-only**. `popups.<name>.width` / `.height` are
+  `int` values in the range 1-100 (interpreted as percent of the outer tmux
+  client area). tmux itself accepts absolute cell counts (`80`, `40c`) but
+  jind-ai does not — the schema is deliberately narrower.
+
+- **Range violations behave asymmetrically** between user config and plugin
+  manifests. User config out-of-range (e.g. `width: 150`) logs a warning
+  and falls back to the default — a broken config never blocks the TUI.
+  Plugin manifest out-of-range (`popup.width: 150` in `jin-plugin.yaml`)
+  hard-fails `Validate()` and the plugin lands in `StateBroken` — a plugin
+  author is expected to fix the manifest.

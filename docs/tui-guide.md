@@ -178,3 +178,53 @@ keybindings:
   search: ["ctrl+p"]  # rebind to Ctrl+p
   # search: []          # disable entirely (no bind-key issued)
 ```
+
+## Popup Sizes
+
+Every tmux popup opened by the TUI has a configurable width and height,
+specified as percentages of the outer tmux client area. Sizes are
+`int` values in the range 1-100; out-of-range values in user config are
+warned and fall back to the default. See `Manager.GetPopupSize` in
+`internal/config/config.go` for the resolver.
+
+Defaults:
+
+| Popup name       | Width | Height | Trigger                    |
+|------------------|-------|--------|----------------------------|
+| `create`         | 80    | 80     | `keybindings.new`          |
+| `notify`         | 70    | 60     | `keybindings.notifications`|
+| `session_filter` | 70    | 70     | `keybindings.search`       |
+| `help`           | 60    | 60     | `keybindings.help`         |
+| `action`         | 70    | 70     | `keybindings.action_panel` |
+| `plugin_default` | 70    | 70     | Plugin `jin pane popup --here` fallback |
+
+Override in `~/.config/jind-ai/config.yaml`:
+
+```yaml
+popups:
+  create:         { width: 90, height: 90 }
+  notify:         { width: 40, height: 20 }
+  session_filter: { width: 80, height: 80 }
+  help:           { width: 60, height: 60 }
+  action:         { width: 70, height: 70 }
+  plugin_default: { width: 70, height: 70 }
+  plugins:
+    my-notifier:  { width: 40, height: 20 }   # override per-plugin
+```
+
+Two delivery paths for the resolved size:
+
+- **Inner path** (BubbleTea → `tmuxClient.DisplayPopup`): `create`, `notify`,
+  `session_filter`, `help` are opened from inside the TUI on each keypress.
+  Config changes take effect the next time the popup opens — no TUI restart
+  needed.
+- **Outer path** (tmux `bind-key display-popup`): `action` and `session_filter`
+  are also bound directly at the outer tmux (`jin-mgr`) root key table so
+  they open even when focus is on the display pane. These bindings are
+  written once at `jin ui` startup and are not re-issued when config changes.
+  Restart `jin ui` for changes to `action` or `session_filter` outer-path
+  sizes to reach tmux.
+
+For plugin popups (`jin pane popup --here`), the priority chain is:
+CLI flag > `JIN_PLUGIN_POPUP_*` env (dispatcher-resolved from user config >
+manifest > `plugin_default`) > empty (tmux built-in default).

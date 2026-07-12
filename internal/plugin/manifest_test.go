@@ -3,6 +3,7 @@ package plugin
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -156,6 +157,80 @@ run: ./run.sh
 	}
 	if got := m.EffectiveTimeout(); got != DefaultTimeout {
 		t.Errorf("EffectiveTimeout = %s, want %s", got, DefaultTimeout)
+	}
+}
+
+func TestManifest_UnmarshalYAML_WithPopup_ParsesFields(t *testing.T) {
+	dir := writeManifest(t, `
+name: notifier
+api_version: 1
+run: ./notify.sh
+popup:
+  width: 40
+  height: 20
+`)
+
+	m, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatalf("LoadManifest: %v", err)
+	}
+	if m.Popup == nil {
+		t.Fatal("Popup = nil, want &PopupConfig{40, 20}")
+	}
+	if m.Popup.Width != 40 || m.Popup.Height != 20 {
+		t.Errorf("Popup = %+v, want {Width:40 Height:20}", m.Popup)
+	}
+}
+
+func TestManifest_UnmarshalYAML_WithoutPopup_ReturnsNil(t *testing.T) {
+	dir := writeManifest(t, `
+name: notifier
+api_version: 1
+run: ./notify.sh
+`)
+
+	m, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatalf("LoadManifest: %v", err)
+	}
+	if m.Popup != nil {
+		t.Errorf("Popup = %+v, want nil", m.Popup)
+	}
+}
+
+func TestManifest_Validate_PopupOutOfRange_ReturnsError(t *testing.T) {
+	tests := []struct {
+		name      string
+		popup     *PopupConfig
+		wantErr   bool
+		errSubstr string
+	}{
+		{name: "width negative", popup: &PopupConfig{Width: -1, Height: 50}, wantErr: true, errSubstr: "popup.width must be 1-100"},
+		{name: "width zero is unset", popup: &PopupConfig{Width: 0, Height: 50}, wantErr: false},
+		{name: "width too large", popup: &PopupConfig{Width: 150, Height: 50}, wantErr: true, errSubstr: "popup.width must be 1-100"},
+		{name: "height negative", popup: &PopupConfig{Width: 50, Height: -5}, wantErr: true, errSubstr: "popup.height must be 1-100"},
+		{name: "both at lower bound", popup: &PopupConfig{Width: 1, Height: 1}, wantErr: false},
+		{name: "both at upper bound", popup: &PopupConfig{Width: 100, Height: 100}, wantErr: false},
+		{name: "nil popup", popup: nil, wantErr: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := Manifest{Name: "notifier", APIVersion: 1, Run: "./run.sh", Popup: tt.popup}
+			err := m.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Validate: want error, got nil")
+				}
+				if !strings.Contains(err.Error(), tt.errSubstr) {
+					t.Errorf("Validate error = %q, want substring %q", err.Error(), tt.errSubstr)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("Validate: want nil, got %v", err)
+			}
+		})
 	}
 }
 

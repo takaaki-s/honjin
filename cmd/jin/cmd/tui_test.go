@@ -233,6 +233,18 @@ func TestSetTransientAgentEnv_UnsetsWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestApplyActionPanelBinding_UsesConfigSize(t *testing.T) {
+	fb := &fakeBinder{}
+	yaml := "popups:\n  action: { width: 90, height: 90 }\n"
+	applyActionPanelBinding(fb, mgrWithYAML(t, yaml), "/usr/local/bin/jin")
+	want := [][]string{
+		{"M-p", "display-popup", "-w", "90%", "-h", "90%", "-T", " Action Palette ", "-E", "'/usr/local/bin/jin' action-popup"},
+	}
+	if !reflect.DeepEqual(fb.calls, want) {
+		t.Errorf("BindKey calls mismatch\n got: %v\nwant: %v", fb.calls, want)
+	}
+}
+
 func TestApplyActionPanelBinding_MultipleKeys(t *testing.T) {
 	fb := &fakeBinder{}
 	yaml := "keybindings:\n  action_panel: [\"M-p\", \"M-x\"]\n"
@@ -252,6 +264,18 @@ func TestApplySessionFilterBinding_BindsAllKeys(t *testing.T) {
 	applySessionFilterBinding(fb, mgrWithYAML(t, yaml), "/usr/local/bin/jin")
 	want := [][]string{
 		{"/", "display-popup", "-w", "70%", "-h", "70%", "-T", " Session Filter ", "-E", "'/usr/local/bin/jin' session-filter-popup"},
+	}
+	if !reflect.DeepEqual(fb.calls, want) {
+		t.Errorf("BindKey calls mismatch\n got: %v\nwant: %v", fb.calls, want)
+	}
+}
+
+func TestApplySessionFilterBinding_UsesConfigSize(t *testing.T) {
+	fb := &fakeBinder{}
+	yaml := "keybindings:\n  search: [\"/\"]\npopups:\n  session_filter: { width: 90, height: 90 }\n"
+	applySessionFilterBinding(fb, mgrWithYAML(t, yaml), "/usr/local/bin/jin")
+	want := [][]string{
+		{"/", "display-popup", "-w", "90%", "-h", "90%", "-T", " Session Filter ", "-E", "'/usr/local/bin/jin' session-filter-popup"},
 	}
 	if !reflect.DeepEqual(fb.calls, want) {
 		t.Errorf("BindKey calls mismatch\n got: %v\nwant: %v", fb.calls, want)

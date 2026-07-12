@@ -68,6 +68,29 @@ If a new package needs debug logging, duplicate the same pattern.
   cross-package need appears, extend the interface (or add a new one) in
   `session/agent_types.go`, then satisfy it from the adapter side.
 
+## Plugin Manifest (popup declaration)
+
+A plugin author can declare a preferred popup size for its `jin pane popup
+--here` calls in `jin-plugin.yaml`:
+
+```yaml
+name: my-notifier
+api_version: 1
+on: [status_changed]
+run: notifier.sh
+popup:                # optional; percent int 1-100
+  width: 40
+  height: 20
+```
+
+Both fields are optional (unset means "no preference — dispatcher falls
+through to the plugin_default"). Out-of-range values (e.g. `width: 150`)
+are rejected by `Manifest.Validate` and land the plugin in
+`StateBroken`. Users can override the manifest per-plugin in their own
+config under `popups.plugins.<name>` — that path takes precedence over
+the manifest. See [architecture.md](architecture.md#popup-size-resolution)
+for the full resolution chain.
+
 ## Testing
 
 Coverage ~40%. Test files exist for all packages.

@@ -65,6 +65,57 @@ TUI's own polling already uses. `JIN_FOCUS_SESSION` shares the
 [tui-guide.md](tui-guide.md#session-filter-popup) for keybindings and the
 matched-field list.
 
+## Popup Size Resolution
+
+Every popup opened by jind-ai has its width and height resolved from a
+single config schema. Two delivery paths carry the resolved size to tmux:
+
+**Core popups** (`create`, `notify`, `session_filter`, `help`, `action`):
+
+```
+Model.openPopup(name)                  cmd/jin/cmd/tui.go
+  └─ Manager.GetPopupSize(name)         apply*Binding (bind-key)
+       ├─ user config popups.<name>       └─ Manager.GetPopupSize(name)
+       └─ hardcoded DefaultPopupSizes         ↓
+                                          tmux bind-key display-popup -w W -h H
+                                          (written once at `jin ui` startup —
+                                          config changes need a TUI restart)
+```
+
+**Plugin popups** (dispatcher → plugin script → `jin pane popup --here`):
+
+```
+[daemon startup]
+  configMgr + plugin.NewDispatcher(..., resolverClosure)
+                                     ↑
+                                     └─ wraps GetPluginPopupSize
+
+[dispatch]
+  d.run(entry)
+    ├─ d.popupResolver(name, manifest.Popup)
+    │    priority: user config popups.plugins[name]
+    │            > manifest popup
+    │            > user config popups.plugin_default
+    │            > hardcoded plugin_default
+    ├─ ExecOptions.PopupWidth/Height ← resolved
+    └─ buildEnv: JIN_PLUGIN_POPUP_{WIDTH,HEIGHT} exported
+                   ↓
+[plugin script calls] jin pane popup --here [--width W] [--height H] -- CMD
+                                            ↑
+                                            └─ flag overrides env; env is
+                                               the fallback dispatcher injected.
+                                               Empty in both → tmux default.
+```
+
+Import boundary: `internal/plugin` does not depend on `internal/config`.
+The resolver is passed as a `PopupSizeResolver` callback at daemon startup;
+`internal/daemon/server.go` converts between `plugin.PopupConfig` and
+`config.PopupSizeConfig` at the boundary.
+
+See [tui-guide.md](tui-guide.md#popup-sizes) for the config schema and
+defaults, and [conventions.md](conventions.md#plugin-manifest-popup-declaration)
+for the plugin author's side (`popup:` field in `jin-plugin.yaml`).
+
 ## Hook Flow (State Detection)
 
 ```

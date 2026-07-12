@@ -75,6 +75,7 @@ func applyActionPanelBinding(tc actionPanelBinder, configMgr *config.Manager, se
 	if configMgr == nil || selfBin == "" {
 		return
 	}
+	width, height := configMgr.GetPopupSize(config.PopupAction)
 	popupCmd := fmt.Sprintf("'%s' action-popup", selfBin)
 	for _, key := range configMgr.GetActionPanelKeys() {
 		if key == "" {
@@ -82,8 +83,8 @@ func applyActionPanelBinding(tc actionPanelBinder, configMgr *config.Manager, se
 		}
 		_ = tc.BindKey(key,
 			"display-popup",
-			"-w", "70%",
-			"-h", "70%",
+			"-w", width,
+			"-h", height,
 			"-T", " Action Palette ",
 			"-E", popupCmd,
 		)
@@ -98,6 +99,7 @@ func applySessionFilterBinding(tc actionPanelBinder, configMgr *config.Manager, 
 	if configMgr == nil || selfBin == "" {
 		return
 	}
+	width, height := configMgr.GetPopupSize(config.PopupSessionFilter)
 	popupCmd := fmt.Sprintf("'%s' session-filter-popup", selfBin)
 	for _, key := range configMgr.GetSessionFilterKeys() {
 		if key == "" {
@@ -105,8 +107,8 @@ func applySessionFilterBinding(tc actionPanelBinder, configMgr *config.Manager, 
 		}
 		_ = tc.BindKey(key,
 			"display-popup",
-			"-w", "70%",
-			"-h", "70%",
+			"-w", width,
+			"-h", height,
 			"-T", " Session Filter ",
 			"-E", popupCmd,
 		)
