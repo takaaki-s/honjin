@@ -324,6 +324,19 @@ keybindings:
   action_panel: ["M-p"]  # Default: M-p
                           # action_panel: []           to disable
                           # action_panel: ["M-x"]      to rebind
+
+# Optional: popup sizes (percent, int 1-100). Every entry is optional;
+# omitted popups keep their default (create/session_filter/action = 70-80).
+# See docs/tui-guide.md#popup-sizes for the full table and delivery paths.
+popups:
+  create:         { width: 80, height: 80 }
+  notify:         { width: 70, height: 60 }
+  session_filter: { width: 70, height: 70 }
+  help:           { width: 60, height: 60 }
+  action:         { width: 70, height: 70 }
+  plugin_default: { width: 70, height: 70 }
+  # plugins:                                # per-plugin overrides
+  #   my-notifier:  { width: 40, height: 20 }
 ```
 
 ### Worktree placement

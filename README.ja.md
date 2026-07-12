@@ -283,6 +283,19 @@ keybindings:
   # アタッチ中
   detach: ["ctrl+]"]  # デフォルト: ctrl+]
                        # サポートキー: ctrl+^, ctrl+], ctrl+\, ctrl+g
+
+# ポップアップサイズ (percent、1-100 の int)。省略した項目はデフォルト値
+# (create/session_filter/action = 70-80) が使われます。全項目と経路は
+# docs/tui-guide.md#popup-sizes を参照。
+popups:
+  create:         { width: 80, height: 80 }
+  notify:         { width: 70, height: 60 }
+  session_filter: { width: 70, height: 70 }
+  help:           { width: 60, height: 60 }
+  action:         { width: 70, height: 70 }
+  plugin_default: { width: 70, height: 70 }
+  # plugins:                                # プラグイン単位の上書き
+  #   my-notifier:  { width: 40, height: 20 }
 ```
 
 ### Worktree の作成先
