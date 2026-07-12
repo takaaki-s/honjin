@@ -1,7 +1,7 @@
 // Package plugin discovers, verifies, and runs jin plugins: user-installed
 // programs that react to session events (status_changed) or explicit actions.
 // Each plugin lives in its own directory under Plugins() and declares a
-// jin-plugin.yaml manifest (name, api_version, on, run, build, timeout).
+// jin-plugin.yaml manifest (name, api_version, on, run, build, timeout, popup).
 //
 // This file owns the manifest: its schema, loading, validation, and the
 // matcher grammar used by the dispatcher to decide which plugins an event
@@ -44,6 +44,15 @@ type Manifest struct {
 	Run        string        `yaml:"run"`
 	Build      string        `yaml:"build,omitempty"`
 	Timeout    time.Duration `yaml:"timeout,omitempty"`
+	Popup      *PopupConfig  `yaml:"popup,omitempty"`
+}
+
+// PopupConfig declares a plugin's preferred popup size as a percentage of the
+// terminal (1-100). A zero field means "unset" — the resolver falls back to
+// user config or the hardcoded plugin default.
+type PopupConfig struct {
+	Width  int `yaml:"width,omitempty"`
+	Height int `yaml:"height,omitempty"`
 }
 
 // UnmarshalYAML decodes the manifest, translating the human-friendly timeout
@@ -51,12 +60,13 @@ type Manifest struct {
 // into this method and lets Timeout arrive as a string.
 func (m *Manifest) UnmarshalYAML(value *yaml.Node) error {
 	var raw struct {
-		Name       string   `yaml:"name"`
-		APIVersion int      `yaml:"api_version"`
-		On         []string `yaml:"on"`
-		Run        string   `yaml:"run"`
-		Build      string   `yaml:"build"`
-		Timeout    string   `yaml:"timeout"`
+		Name       string       `yaml:"name"`
+		APIVersion int          `yaml:"api_version"`
+		On         []string     `yaml:"on"`
+		Run        string       `yaml:"run"`
+		Build      string       `yaml:"build"`
+		Timeout    string       `yaml:"timeout"`
+		Popup      *PopupConfig `yaml:"popup"`
 	}
 	if err := value.Decode(&raw); err != nil {
 		return err
@@ -67,6 +77,7 @@ func (m *Manifest) UnmarshalYAML(value *yaml.Node) error {
 	m.On = raw.On
 	m.Run = raw.Run
 	m.Build = raw.Build
+	m.Popup = raw.Popup
 	if raw.Timeout != "" {
 		d, err := time.ParseDuration(raw.Timeout)
 		if err != nil {
@@ -104,6 +115,14 @@ func (m *Manifest) Validate() error {
 	for _, matcher := range m.On {
 		if err := ValidateMatcher(matcher); err != nil {
 			return fmt.Errorf("manifest: on: %w", err)
+		}
+	}
+	if m.Popup != nil {
+		if m.Popup.Width != 0 && (m.Popup.Width < 1 || m.Popup.Width > 100) {
+			return fmt.Errorf("manifest: popup.width must be 1-100 (got %d)", m.Popup.Width)
+		}
+		if m.Popup.Height != 0 && (m.Popup.Height < 1 || m.Popup.Height > 100) {
+			return fmt.Errorf("manifest: popup.height must be 1-100 (got %d)", m.Popup.Height)
 		}
 	}
 	return nil
