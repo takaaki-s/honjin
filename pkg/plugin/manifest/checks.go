@@ -50,6 +50,8 @@ const (
 	RuleVersionMonotonic    RuleID = 10
 	RuleLicenseFile         RuleID = 11
 	RuleReadmeMinimal       RuleID = 12
+	RuleBuildExec           RuleID = 13 // opt-in via `plugin validate --run-build`
+	RuleEntrypointExists    RuleID = 14 // opt-in via `plugin validate --run-build`
 	RuleOnMatcher           RuleID = 15
 	RulePopupBounds         RuleID = 16
 	RuleUnknownFieldWarning RuleID = 100 // synthetic; forward-compat WARN, out of the spec table range
@@ -85,10 +87,9 @@ type RegistryLookup interface {
 // CheckOptions bundles the moving parts of a check run: the plugin directory
 // (needed for file-existence rules), a registry lookup (nil = skip network
 // checks), the caller's own repo identity for rule #9, and any unknown
-// fields carried over from Parse. The opt-in build execution (rules #13/#14
-// from the spec table) is not wired in yet and lives with the `plugin
-// validate` command (J3); the RuleID slots are reserved in
-// docs/plugin-registry.md and will be added here when the executor lands.
+// fields carried over from Parse. The opt-in build execution (rules #13/#14)
+// runs in the `plugin validate --run-build` command, which appends its own
+// findings on top of Check's output.
 type CheckOptions struct {
 	PluginDir     string
 	Registry      RegistryLookup
