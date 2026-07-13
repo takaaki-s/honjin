@@ -169,6 +169,16 @@ func ParseSource(arg string) (Source, error) {
 	return Source{Raw: arg, CloneURL: cloneURL, Ref: ref}, nil
 }
 
+// FetchOptions tunes a Fetch or FetchUpdate call. Zero value keeps the
+// historical fail-closed behaviour (compat mismatches abort).
+type FetchOptions struct {
+	// AllowIncompatibleJin lets the fetch succeed even when the manifest's
+	// jin range does not match the running binary. The CLI opts in via
+	// --force so the user can install anyway; a mismatched entry is still
+	// surfaced to the caller (via CompatErr) so a warning can be printed.
+	AllowIncompatibleJin bool
+}
+
 // InstallPlan is a fetched-but-not-yet-committed install: the clone is staged
 // under pluginsDir and its manifest and commit SHA are known, but nothing has
 // been placed at the plugin's final path. The CLI shows the plan to the user,
@@ -182,6 +192,30 @@ type InstallPlan struct {
 	commitSHA  string
 	prevCommit string // update only: the SHA being replaced
 	isUpdate   bool
+	compatErr  error // populated when Fetch was told to allow an incompatible jin range
+}
+
+// CompatErr returns the jin compat mismatch surfaced during Fetch when
+// FetchOptions.AllowIncompatibleJin was set. A nil result means the
+// manifest's jin range is satisfied by the current binary.
+func (p *InstallPlan) CompatErr() error { return p.compatErr }
+
+// applyCompatCheck runs checkJinCompat against the plan's manifest and either
+// aborts the plan (fail-closed, the default) or stashes the mismatch on the
+// plan (when opts opted in via AllowIncompatibleJin). Extracted so Fetch and
+// FetchUpdate share the same invariant — currently the sole owner of "when
+// does a compat mismatch reject a plan".
+func (p *InstallPlan) applyCompatCheck(opts FetchOptions) error {
+	compatErr := checkJinCompat(p.manifest)
+	if compatErr == nil {
+		return nil
+	}
+	if !opts.AllowIncompatibleJin {
+		p.Abort()
+		return compatErr
+	}
+	p.compatErr = compatErr
+	return nil
 }
 
 // Manifest returns the loaded, validated manifest of the staged plugin.
@@ -196,10 +230,12 @@ func (p *InstallPlan) CommitSHA() string { return p.commitSHA }
 func (p *InstallPlan) PrevCommitSHA() string { return p.prevCommit }
 
 // Fetch clones src into a staging directory under pluginsDir, validates its
-// manifest (fail-closed on a jin compat mismatch), and rejects the install
-// if the plugin's declared name is already installed. On any failure the staging
-// directory is removed so a failed fetch leaves no clutter.
-func Fetch(src Source, pluginsDir, stateDir string) (*InstallPlan, error) {
+// manifest, and rejects the install if the plugin's declared name is already
+// installed. A jin compat mismatch aborts the fetch unless opts opts-in via
+// AllowIncompatibleJin, in which case the mismatch is stashed on the plan
+// (CompatErr) so the CLI can warn without blocking. On any failure the
+// staging directory is removed so a failed fetch leaves no clutter.
+func Fetch(src Source, pluginsDir, stateDir string, opts FetchOptions) (*InstallPlan, error) {
 	staging, m, sha, err := fetchToStaging(src, pluginsDir)
 	if err != nil {
 		return nil, err
@@ -207,6 +243,10 @@ func Fetch(src Source, pluginsDir, stateDir string) (*InstallPlan, error) {
 	p := &InstallPlan{
 		src: src, pluginsDir: pluginsDir, stateDir: stateDir,
 		staging: staging, manifest: m, commitSHA: sha,
+	}
+
+	if err := p.applyCompatCheck(opts); err != nil {
+		return nil, err
 	}
 
 	dest := filepath.Join(pluginsDir, m.Name)
@@ -223,8 +263,9 @@ func Fetch(src Source, pluginsDir, stateDir string) (*InstallPlan, error) {
 // FetchUpdate re-clones an installed plugin from its locked source so the update
 // can be validated before the current version is touched. Linked plugins have no
 // clone to update and are rejected. The updated manifest must keep the same name
-// so the atomic swap in Commit targets the right directory.
-func FetchUpdate(name, pluginsDir, stateDir string) (*InstallPlan, error) {
+// so the atomic swap in Commit targets the right directory. Jin compat handling
+// follows the same rules as Fetch (see FetchOptions).
+func FetchUpdate(name, pluginsDir, stateDir string, opts FetchOptions) (*InstallPlan, error) {
 	lock, err := LoadLock(stateDir)
 	if err != nil {
 		return nil, err
@@ -251,11 +292,15 @@ func FetchUpdate(name, pluginsDir, stateDir string) (*InstallPlan, error) {
 		_ = os.RemoveAll(staging)
 		return nil, fmt.Errorf("updated manifest name %q does not match installed name %q", m.Name, name)
 	}
-	return &InstallPlan{
+	p := &InstallPlan{
 		src: src, pluginsDir: pluginsDir, stateDir: stateDir,
 		staging: staging, manifest: m, commitSHA: sha,
 		prevCommit: entry.Commit, isUpdate: true,
-	}, nil
+	}
+	if err := p.applyCompatCheck(opts); err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
 // Commit builds the staged plugin (when the manifest declares install.source.build),
@@ -332,10 +377,11 @@ func (p *InstallPlan) Abort() {
 	p.staging = ""
 }
 
-// fetchToStaging clones src into a fresh staging dir under pluginsDir, checks out
-// Ref when set, loads and jin-compat-checks the manifest, and reads the HEAD
-// commit. Any failure removes the staging dir so callers never see a partial
-// clone.
+// fetchToStaging clones src into a fresh staging dir under pluginsDir, checks
+// out Ref when set, loads the manifest, and reads the HEAD commit. The jin
+// compat check is left to callers (Fetch/FetchUpdate) so opts like
+// AllowIncompatibleJin can steer it. Any failure removes the staging dir so
+// callers never see a partial clone.
 func fetchToStaging(src Source, pluginsDir string) (staging string, m *manifest.Manifest, sha string, err error) {
 	if err = os.MkdirAll(pluginsDir, 0o755); err != nil {
 		return "", nil, "", fmt.Errorf("mkdir plugins dir: %w", err)
@@ -358,9 +404,6 @@ func fetchToStaging(src Source, pluginsDir string) (staging string, m *manifest.
 		}
 	}
 	if m, err = loadManifest(staging); err != nil {
-		return
-	}
-	if err = checkJinCompat(m); err != nil {
 		return
 	}
 	sha, err = gitHeadSHA(staging)
