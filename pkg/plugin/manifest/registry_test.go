@@ -443,4 +443,3 @@ func TestClient_Load_HonorsContext(t *testing.T) {
 		t.Fatalf("expected context error, got: %v", err)
 	}
 }
-
