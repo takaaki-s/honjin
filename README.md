@@ -547,9 +547,7 @@ it runs and what environment it gets.
 
 Community plugins are discoverable through the [plugin registry](docs/plugin-registry.md):
 `jin plugin ls-remote` lists them, `jin plugin install <name>` installs one
-by registry name with a commit-pinned consent screen. See
-[docs/plugin-registry.md](docs/plugin-registry.md) for the full discover /
-install / publish flow and the pre-1.0 break policy.
+by registry name with a commit-pinned consent screen.
 
 ### Two ways a plugin runs
 

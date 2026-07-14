@@ -480,7 +480,7 @@ hook が非ゼロ終了またはタイムアウトすると、worktree とブラ
 
 jind-ai では、セッションのステータス変化に反応して、あるいはオンデマンドで、任意のシェル実行可能なプラグインを実行できます。プラグインはマニフェストとエントリーポイントのスクリプトを持つディレクトリです。jind-ai はスクリプトが何をするかには関与せず、いつ実行されどんな環境を受け取るかだけを管理します。
 
-コミュニティプラグインは [plugin registry](docs/plugin-registry.md) から発見できます。`jin plugin ls-remote` で一覧、`jin plugin install <name>` でレジストリ名指定インストール（コミット SHA ピン + 同意画面付き）が可能です。詳細な discover / install / publish フロー、pre-1.0 破壊的変更ポリシーは [docs/plugin-registry.md](docs/plugin-registry.md) を参照してください。
+コミュニティプラグインは [plugin registry](docs/plugin-registry.md) から発見できます。`jin plugin ls-remote` で一覧、`jin plugin install <name>` でレジストリ名指定インストール（コミット SHA ピン + 同意画面付き）が可能です。
 
 ### 2 通りの実行方式
 

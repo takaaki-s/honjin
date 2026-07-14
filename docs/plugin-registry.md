@@ -35,24 +35,12 @@ timeout: 30s
 
 See the ["Plugins → Manifest" section in the top-level README](../README.md#manifest-jind-ai-pluginyaml)
 for the full field reference; every field there is honoured identically by the
-registry crawler.
+registry crawler. Two publish-specific notes:
 
-Field notes specific to registry publish:
-
-- **`name`** — matches `^[a-z][a-z0-9-]{1,63}$`; must be unique across the
-  registry. Collision policy is described under
-  [Publishing](#publishing-a-plugin) below.
-- **`description`** — the one-liner shown in `jin plugin ls-remote` search
-  results and in the registry entry. Keep it under ~80 characters.
-- **`license` / `homepage`** — optional metadata carried into the registry
-  entry verbatim.
-- **`jin`** — semver constraint on the jin binary (`">=0.7.0"`, `"^0.7"`,
-  `">=0.7 <0.9"`). Consumers of the registry evaluate this against their own
-  `jin --version`, so declaring a range you have not tested is a footgun.
-
-Unknown fields are ignored by both the runtime and the crawler (a forward-
-compatibility guarantee — see the [break-policy](#pre-10-break-policy) below
-for what "unknown" is allowed to mean over time).
+- `name` uniqueness across the registry is resolved by the crawler — see
+  [Name conflict policy](#name-conflict-policy).
+- Declaring a `jin` range you have not tested is a footgun: consumers
+  evaluate it against their own `jin --version`.
 
 ## Discovering plugins
 
@@ -85,17 +73,15 @@ jin plugin install jind-ai-notifier --yes        # skip the consent prompt
 
 `jin plugin install` accepts three source shapes:
 
-1. **Registry name** (`jind-ai-notifier`) — resolves through the registry to a
-   repo and a pinned commit SHA. This section.
+1. **Registry name** (`jind-ai-notifier`) — resolves through the registry and
+   always pins to the commit SHA the registry recorded at crawl time. That
+   SHA is written into `plugins.lock.yaml`, so a later `install`/`update` of
+   the same version never lands on a different commit than the one you
+   approved.
 2. **Git URL** (`github.com/owner/repo[@ref]`) — clones directly, bypasses
-   the registry. Existing behaviour, no consent-screen changes.
+   the registry.
 3. **`--link <path>`** — symlinks a local plugin directory (development).
    Trusted outright; no build runs.
-
-A registry-name install always pins to the commit SHA the registry recorded
-at crawl time. That SHA is written into `plugins.lock.yaml` on success, so a
-subsequent `jin plugin install` / `update` of the same version can never
-silently land on a different commit than the one you approved.
 
 ### Consent screen
 
@@ -115,11 +101,9 @@ Before doing anything, install shows a single-screen summary:
 Install? [y/N]:
 ```
 
-The screen is deliberately flat — everything a user needs to decide sits on
-one page, no drill-in required. The exact shell commands that will run are
-shown verbatim (no cosmetic simplification); the community-plugin marker is
-always present because the registry does no verification; and the jin compat
-verdict (✓ / ✗) is computed against the running binary.
+The community-plugin marker always shows because the registry performs no
+verification; the compat verdict (✓ / ✗) is evaluated against the running
+binary.
 
 Skip the prompt with `--yes`. When compat fails, install aborts unless
 `--force` is passed — the ✗ verdict is shown either way before that decision.
@@ -153,7 +137,7 @@ the same validation on every PR.
 ### Name conflict policy
 
 Two repos can declare the same `name`. The crawler resolves this
-deterministically so a plugin's identity is stable across runs:
+deterministically:
 
 - The **previous crawl's owner** of the name keeps it as long as its repo
   still exists and still declares the topic. A new repo claiming the same
@@ -187,10 +171,9 @@ Exit codes: `0` = pass (or WARN only), `1` = ERROR (or WARN with
 `::error file=jind-ai-plugin.yaml,line=N::…` and a markdown summary is
 appended to `$GITHUB_STEP_SUMMARY` when set.
 
-The template repo's `.github/workflows/ci.yaml` downloads a pinned jin
-release and invokes this command directly — there is no separate GitHub
-Action to install or configure. See the template repo's README for the
-snippet.
+See the template repo's `.github/workflows/ci.yaml` for a working snippet
+(no separate GitHub Action needed — the workflow downloads a pinned jin
+release and invokes `jin plugin validate` directly).
 
 ## Pre-1.0 break policy
 
@@ -213,11 +196,7 @@ Concretely for plugin authors, this means:
 - Expect to re-test your plugin on every jin minor bump during pre-1.0. When
   a bump lands, the CHANGELOG's Features section will call out any changes
   that affect plugins.
-- Treat any unknown environment variable, JSON field, or CLI flag as
-  something to ignore rather than error on — jind-ai only adds within a
-  `schema_version`, and this contract is what makes minor bumps survivable.
-
-The `schema_version` in `jind-ai-plugin.yaml` and in the registry JSON is
-orthogonal to jin's own version. It bumps only when a field is removed or
-its semantics change, and the validator supports the current version plus
-two generations back.
+- Follow the [compatibility contract](../README.md#compatibility) in the
+  README: treat unknown env vars / JSON fields / CLI flags as ignorable —
+  that's what makes minor bumps survivable, and it also documents the
+  `schema_version` window jind-ai supports.

@@ -9,31 +9,16 @@ log.
 
 ### Features
 
-- **Plugin registry** — discover community plugins by name, install them with
-  a commit-pinned consent screen. New commands:
-  - `jin plugin ls-remote` lists plugins from the registry
-    (`https://takaaki-s.github.io/jind-ai-plugin-registry/registry.json`),
-    with `--sort`, `--search`, `--refresh`, `--json`, and `--registry` flags.
-    The registry document is cached locally for 24 hours with conditional-GET
-    revalidation; fetch failures fall back to the stale cache with a warning.
-  - `jin plugin install <name>` (e.g. `jin plugin install jind-ai-notifier`)
-    resolves through the registry, always clones at the SHA the registry
-    recorded at crawl time, and prints a single-screen consent dialog before
-    touching anything. `-v/--pin` selects a specific version, `--force`
-    overrides an unsatisfied `jin:` compat range, `--yes` skips the prompt.
-  - `jin plugin validate` runs the same manifest checks as the registry
-    crawler and every plugin repo's CI, so authors get identical feedback
-    locally. `--github-actions` emits annotation-formatted output.
+- **Plugin registry** — new `jin plugin ls-remote`, `jin plugin install <name>`
+  (registry-resolved with SHA pin and a consent screen), and `jin plugin
+  validate` commands. See [docs/plugin-registry.md](docs/plugin-registry.md)
+  for the discover/install/publish flow and full flag reference.
 - **Unified plugin manifest (`jind-ai-plugin.yaml`)** — the runtime dispatcher
   and the registry crawler now read the same file with the same schema. The
   old `jin-plugin.yaml` / `api_version` shape has been removed.
-- **`pkg/plugin/manifest`** — the manifest package is now exported. The
-  registry crawler and any third-party tool can validate manifests bit-for-bit
+- **`pkg/plugin/manifest`** — the manifest package is now exported so the
+  registry crawler and any third-party tool validate manifests bit-for-bit
   identically to jin itself.
-
-See [docs/plugin-registry.md](docs/plugin-registry.md) for the full
-plugin-registry guide, the manifest schema, install/publish flows, and the
-pre-1.0 break policy.
 
 ### Breaking changes
 
