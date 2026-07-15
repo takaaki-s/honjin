@@ -55,6 +55,15 @@ func TestResolveRemote_LatestPicksLatestVersion(t *testing.T) {
 	if src.Ref != "bbbbbbbbbbbb" {
 		t.Errorf("Ref = %q, want bbbbbbbbbbbb", src.Ref)
 	}
+	// Raw is what the lock stores and what FetchUpdate re-parses, so it must
+	// round-trip through ParseSource to the same clone URL.
+	reparsed, err := ParseSource(src.Raw)
+	if err != nil {
+		t.Fatalf("ParseSource(%q): %v", src.Raw, err)
+	}
+	if reparsed.CloneURL != src.CloneURL {
+		t.Errorf("re-parsed CloneURL = %q, want %q (Raw = %q)", reparsed.CloneURL, src.CloneURL, src.Raw)
+	}
 }
 
 func TestResolveRemote_PinSelectsVersion(t *testing.T) {

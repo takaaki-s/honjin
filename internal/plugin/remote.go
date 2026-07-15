@@ -26,16 +26,18 @@ type RemoteResolution struct {
 // Source returns the Source that, passed to Fetch, will clone the resolved
 // repo at the resolved SHA. Registry entries record Repo as bare
 // "owner/name" (the crawler's GitHub FullName), and the MVP registry is
-// GitHub-only, so bare entries are treated as github.com/<repo>. Entries
+// GitHub-only, so bare entries are prefixed with github.com/. Entries
 // carrying a URL scheme (file://, http://…) are passed through unchanged so
-// integration tests and future mirrors do not need a live GitHub.
+// integration tests and future mirrors do not need a live GitHub. The result
+// is fed through ParseSource so Raw is a form later `jin plugin update` calls
+// can re-parse out of the lock — the scheme/host handling stays in one place.
 func (r RemoteResolution) Source() Source {
-	raw := r.Entry.Repo + "@" + r.Version.SHA
-	cloneURL := r.Entry.Repo
-	if !strings.Contains(cloneURL, "://") {
-		cloneURL = "https://github.com/" + cloneURL
+	arg := r.Entry.Repo
+	if !strings.Contains(arg, "://") {
+		arg = "github.com/" + arg
 	}
-	return Source{Raw: raw, CloneURL: cloneURL, Ref: r.Version.SHA}
+	s, _ := ParseSource(arg + "@" + r.Version.SHA) // arg is non-empty, so ParseSource cannot fail
+	return s
 }
 
 // ResolveRemote looks up name in doc and picks a version. An empty versionPin
