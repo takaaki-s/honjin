@@ -118,12 +118,6 @@ func applySessionFilterBinding(tc actionPanelBinder, configMgr *config.Manager, 
 	}
 }
 
-// pluginActionBinder is the minimal tmux surface applyPluginActionBindings
-// needs. *tmux.Client satisfies it directly; tests inject a fake.
-type pluginActionBinder interface {
-	BindKey(key string, cmdArgs ...string) error
-}
-
 // installedPluginSetFn is a function that returns the set of currently
 // installed and enabled plugin names. Injected into
 // applyPluginActionBindings so tests can bypass the on-disk registry read.
@@ -139,8 +133,9 @@ type installedPluginSetFn func() map[string]struct{}
 // common in dev environments and must never block TUI startup. Key
 // collisions with core outer-tmux bindings are warned once (see
 // reservedOuterTmuxKeys) but not blocked; tmux's last-write-wins semantics
-// apply.
-func applyPluginActionBindings(tc pluginActionBinder, configMgr *config.Manager, selfBin string, installedFn installedPluginSetFn) {
+// apply. Reuses actionPanelBinder — same one-method interface as the two
+// existing binder callers.
+func applyPluginActionBindings(tc actionPanelBinder, configMgr *config.Manager, selfBin string, installedFn installedPluginSetFn) {
 	if configMgr == nil || selfBin == "" || installedFn == nil {
 		return
 	}
@@ -157,6 +152,7 @@ func applyPluginActionBindings(tc pluginActionBinder, configMgr *config.Manager,
 			log.Printf("plugin key binding skipped: %s not in the enabled plugin set (uninstalled, disabled, broken, or incompatible)", name)
 			continue
 		}
+		runShellCmd := fmt.Sprintf("'%s' plugin run %s", selfBin, name)
 		for _, key := range kb.Keys {
 			if key == "" {
 				continue
@@ -164,7 +160,6 @@ func applyPluginActionBindings(tc pluginActionBinder, configMgr *config.Manager,
 			if other, ok := reserved[key]; ok {
 				log.Printf("plugin %s key %q collides with %s; last binding wins", name, key, other)
 			}
-			runShellCmd := fmt.Sprintf("'%s' plugin run %s", selfBin, name)
 			_ = tc.BindKey(key, "run-shell", runShellCmd)
 		}
 	}
@@ -196,21 +191,16 @@ func installedEnabledPluginNames(pluginsDir string, configMgr *config.Manager) m
 // to warn on plugin key collisions.
 func reservedOuterTmuxKeys(configMgr *config.Manager) map[string]string {
 	out := map[string]string{}
-	for _, k := range configMgr.GetActionPanelKeys() {
-		if k != "" {
-			out[k] = "core:action-panel"
+	add := func(keys []string, tag string) {
+		for _, k := range keys {
+			if k != "" {
+				out[k] = tag
+			}
 		}
 	}
-	for _, k := range configMgr.GetTogglePaneKeys() {
-		if k != "" {
-			out[k] = "core:toggle-pane"
-		}
-	}
-	for _, k := range configMgr.GetSessionFilterKeys() {
-		if k != "" {
-			out[k] = "core:session-filter"
-		}
-	}
+	add(configMgr.GetActionPanelKeys(), "core:action-panel")
+	add(configMgr.GetTogglePaneKeys(), "core:toggle-pane")
+	add(configMgr.GetSessionFilterKeys(), "core:session-filter")
 	return out
 }
 

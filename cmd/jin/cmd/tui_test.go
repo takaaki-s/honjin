@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -247,58 +248,33 @@ func TestApplyPluginActionBindings_MultipleKeysPerPlugin(t *testing.T) {
 }
 
 func TestApplyPluginActionBindings_LogsCollisionWithCoreKey(t *testing.T) {
-	// ActionPanel default is "M-p"; assigning it to a plugin exercises the
-	// reservedOuterTmuxKeys warning path. The binding is still issued —
-	// spec F7 says "warn only, bind-key 発行は行う" — and tmux last-write-
-	// wins decides which fires.
-	buf := withMutedLog(t)
-
-	fb := &fakeBinder{}
-	yaml := "keybindings:\n  plugins:\n    notifier: { keys: [\"M-p\"] }\n"
-	applyPluginActionBindings(fb, mgrWithYAML(t, yaml), "/usr/local/bin/jin", pluginSet("notifier"))
-
-	if !strings.Contains(buf.String(), `collides with core:action-panel`) {
-		t.Errorf("expected collision log against core:action-panel, got: %s", buf.String())
+	// Each row covers a distinct branch of reservedOuterTmuxKeys so a copy/
+	// paste regression on any of the three collectors is caught. Spec F7:
+	// "warn only, bind-key 発行は行う" — tmux last-write-wins decides which
+	// binding actually fires.
+	cases := []struct {
+		name    string
+		yamlKey string // raw string as it appears in the yaml literal (needs \\ escaping for M-\)
+		wantTag string
+	}{
+		{"ActionPanel", "M-p", "core:action-panel"},
+		{"TogglePane", `M-\\`, "core:toggle-pane"},
+		{"SessionFilter", "M-f", "core:session-filter"},
 	}
-	want := [][]string{
-		{"M-p", "run-shell", "'/usr/local/bin/jin' plugin run notifier"},
-	}
-	if !reflect.DeepEqual(fb.calls, want) {
-		t.Errorf("BindKey calls mismatch\n got: %v\nwant: %v", fb.calls, want)
-	}
-}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := withMutedLog(t)
+			fb := &fakeBinder{}
+			yaml := fmt.Sprintf("keybindings:\n  plugins:\n    notifier: { keys: [\"%s\"] }\n", tc.yamlKey)
+			applyPluginActionBindings(fb, mgrWithYAML(t, yaml), "/usr/local/bin/jin", pluginSet("notifier"))
 
-func TestApplyPluginActionBindings_LogsCollisionWithTogglePane(t *testing.T) {
-	// TogglePane default is "M-\\"; different core key surface exercises the
-	// same reserved-map path for the second core entry.
-	buf := withMutedLog(t)
-
-	fb := &fakeBinder{}
-	yaml := "keybindings:\n  plugins:\n    notifier: { keys: [\"M-\\\\\"] }\n"
-	applyPluginActionBindings(fb, mgrWithYAML(t, yaml), "/usr/local/bin/jin", pluginSet("notifier"))
-
-	if !strings.Contains(buf.String(), `collides with core:toggle-pane`) {
-		t.Errorf("expected collision log against core:toggle-pane, got: %s", buf.String())
-	}
-	if len(fb.calls) != 1 {
-		t.Errorf("expected 1 BindKey despite collision, got %d: %v", len(fb.calls), fb.calls)
-	}
-}
-
-func TestApplyPluginActionBindings_LogsCollisionWithSessionFilter(t *testing.T) {
-	// SessionFilter default is "M-f"; exercises the third reservedOuterTmuxKeys
-	// branch so a copy/paste regression there is caught by unit tests.
-	buf := withMutedLog(t)
-
-	fb := &fakeBinder{}
-	yaml := "keybindings:\n  plugins:\n    notifier: { keys: [\"M-f\"] }\n"
-	applyPluginActionBindings(fb, mgrWithYAML(t, yaml), "/usr/local/bin/jin", pluginSet("notifier"))
-
-	if !strings.Contains(buf.String(), `collides with core:session-filter`) {
-		t.Errorf("expected collision log against core:session-filter, got: %s", buf.String())
-	}
-	if len(fb.calls) != 1 {
-		t.Errorf("expected 1 BindKey despite collision, got %d: %v", len(fb.calls), fb.calls)
+			if !strings.Contains(buf.String(), "collides with "+tc.wantTag) {
+				t.Errorf("expected collision log against %s, got: %s", tc.wantTag, buf.String())
+			}
+			if len(fb.calls) != 1 {
+				t.Errorf("expected 1 BindKey despite collision, got %d: %v", len(fb.calls), fb.calls)
+			}
+		})
 	}
 }
 
