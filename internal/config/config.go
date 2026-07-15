@@ -26,6 +26,18 @@ func ValidateDetachKey(key string) error {
 		key, strings.Join(supportedDetachKeys, ", "))
 }
 
+// PluginKeybinding is the per-plugin subset of KeybindingsConfig. Kept as a
+// struct (not a bare []string) so future per-binding options (e.g. whether
+// to pass the cursor session, arg templates) can be added without a
+// breaking schema flip.
+type PluginKeybinding struct {
+	// Keys is tmux bind-key notation, e.g. []string{"M-n"}. Must be
+	// modifier-prefixed so bare-letter input in the display pane still
+	// reaches the agent (same constraint as ActionPanel/TogglePane).
+	// nil or empty ⇒ no binding for this plugin.
+	Keys []string `mapstructure:"keys,omitempty"`
+}
+
 // KeybindingsConfig represents keybinding settings
 type KeybindingsConfig struct {
 	// Session list screen
@@ -63,6 +75,12 @@ type KeybindingsConfig struct {
 	// nil ⇒ use default from DefaultKeybindings. Explicit empty slice ⇒ disabled
 	// (no bind-key is issued).
 	ActionPanel []string `mapstructure:"action_panel,omitempty"`
+
+	// Outer tmux (jin-mgr) — per-plugin action triggers.
+	// Key: plugin name (matches `name:` in jin-plugin.yaml).
+	// Absent map / empty map ⇒ no per-plugin bindings (no default).
+	// Each PluginKeybinding.Keys is passed straight to tmux bind-key.
+	Plugins map[string]PluginKeybinding `mapstructure:"plugins,omitempty"`
 }
 
 // WorktreeConfig represents settings for the git-worktree session option.
@@ -672,6 +690,29 @@ func (m *Manager) GetActionPanelKeys() []string {
 		return DefaultKeybindings().ActionPanel
 	}
 	return m.config.Keybindings.ActionPanel
+}
+
+// GetPluginKeybindings returns the per-plugin outer-tmux bindings. Returns
+// a fresh copy (never the internal map, never nil) so callers can iterate
+// or mutate without touching Manager state — same defensive-copy policy as
+// GetEnv (see :372). Semantics per plugin:
+//   - key absent from map ⇒ no binding
+//   - Keys nil / empty ⇒ no binding (symmetry with core "empty disables")
+//   - Keys non-empty ⇒ each string is passed straight to tmux bind-key
+func (m *Manager) GetPluginKeybindings() map[string]PluginKeybinding {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	src := m.config.Keybindings.Plugins
+	out := make(map[string]PluginKeybinding, len(src))
+	for name, kb := range src {
+		var keys []string
+		if len(kb.Keys) > 0 {
+			keys = append([]string(nil), kb.Keys...)
+		}
+		out[name] = PluginKeybinding{Keys: keys}
+	}
+	return out
 }
 
 // GetSessionFilterKeys returns the tmux bind-key strings for the outer-tmux

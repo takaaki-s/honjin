@@ -426,6 +426,104 @@ func TestGetSessionFilterKeys_ExplicitEmptyDisables(t *testing.T) {
 	}
 }
 
+// --- GetPluginKeybindings ---
+// nil config field ⇒ empty map (never nil). Map / Keys slice are defensively
+// copied so callers cannot mutate Manager state via the returned value.
+
+func TestGetPluginKeybindings_DefaultWhenNil(t *testing.T) {
+	m := &Manager{config: &Config{}}
+	got := m.GetPluginKeybindings()
+	if got == nil {
+		t.Fatalf("GetPluginKeybindings() = nil, want empty map")
+	}
+	if len(got) != 0 {
+		t.Errorf("GetPluginKeybindings() = %v, want empty map", got)
+	}
+}
+
+func TestGetPluginKeybindings_SinglePlugin(t *testing.T) {
+	m := &Manager{config: &Config{
+		Keybindings: KeybindingsConfig{
+			Plugins: map[string]PluginKeybinding{
+				"notifier": {Keys: []string{"M-n"}},
+			},
+		},
+	}}
+	got := m.GetPluginKeybindings()
+	want := map[string]PluginKeybinding{"notifier": {Keys: []string{"M-n"}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("GetPluginKeybindings() = %#v, want %#v", got, want)
+	}
+}
+
+func TestGetPluginKeybindings_MultiplePlugins(t *testing.T) {
+	m := &Manager{config: &Config{
+		Keybindings: KeybindingsConfig{
+			Plugins: map[string]PluginKeybinding{
+				"notifier":         {Keys: []string{"M-n"}},
+				"worktree-cleanup": {Keys: []string{"M-w"}},
+			},
+		},
+	}}
+	got := m.GetPluginKeybindings()
+	want := map[string]PluginKeybinding{
+		"notifier":         {Keys: []string{"M-n"}},
+		"worktree-cleanup": {Keys: []string{"M-w"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("GetPluginKeybindings() = %#v, want %#v", got, want)
+	}
+}
+
+func TestGetPluginKeybindings_MultipleKeysPerPlugin(t *testing.T) {
+	m := &Manager{config: &Config{
+		Keybindings: KeybindingsConfig{
+			Plugins: map[string]PluginKeybinding{
+				"notifier": {Keys: []string{"M-n", "M-!"}},
+			},
+		},
+	}}
+	got := m.GetPluginKeybindings()
+	want := map[string]PluginKeybinding{"notifier": {Keys: []string{"M-n", "M-!"}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("GetPluginKeybindings() = %#v, want %#v", got, want)
+	}
+}
+
+func TestGetPluginKeybindings_ReturnsDefensiveCopy(t *testing.T) {
+	m := &Manager{config: &Config{
+		Keybindings: KeybindingsConfig{
+			Plugins: map[string]PluginKeybinding{
+				"notifier": {Keys: []string{"M-n"}},
+			},
+		},
+	}}
+	got := m.GetPluginKeybindings()
+
+	// Mutating the returned map / slice must not touch Manager internals.
+	got["notifier"] = PluginKeybinding{Keys: []string{"M-x"}}
+	got["injected"] = PluginKeybinding{Keys: []string{"M-y"}}
+
+	fresh := m.GetPluginKeybindings()
+	if len(fresh) != 1 {
+		t.Errorf("post-mutation fresh copy has %d entries, want 1", len(fresh))
+	}
+	if kb, ok := fresh["notifier"]; !ok || !reflect.DeepEqual(kb.Keys, []string{"M-n"}) {
+		t.Errorf("post-mutation fresh notifier = %#v, want Keys=[M-n]", kb)
+	}
+	if _, ok := fresh["injected"]; ok {
+		t.Errorf("post-mutation fresh copy leaked 'injected' entry from caller mutation")
+	}
+
+	// Same guarantee for the Keys slice itself.
+	firstCall := m.GetPluginKeybindings()
+	firstCall["notifier"].Keys[0] = "MUTATED"
+	secondCall := m.GetPluginKeybindings()
+	if secondCall["notifier"].Keys[0] != "M-n" {
+		t.Errorf("Keys slice not defensively copied: got %q, want M-n", secondCall["notifier"].Keys[0])
+	}
+}
+
 // --- PopupsConfig YAML decode ---
 
 // writePopupYAML writes a config.yaml into a fresh temp dir and returns the

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -10,6 +11,8 @@ import (
 	"github.com/takaaki-s/jind-ai/internal/agent"
 	"github.com/takaaki-s/jind-ai/internal/config"
 	"github.com/takaaki-s/jind-ai/internal/daemon"
+	"github.com/takaaki-s/jind-ai/internal/paths"
+	"github.com/takaaki-s/jind-ai/internal/plugin"
 	"github.com/takaaki-s/jind-ai/internal/tmux"
 	"github.com/takaaki-s/jind-ai/internal/tui"
 	"golang.org/x/term"
@@ -113,6 +116,102 @@ func applySessionFilterBinding(tc actionPanelBinder, configMgr *config.Manager, 
 			"-E", popupCmd,
 		)
 	}
+}
+
+// pluginActionBinder is the minimal tmux surface applyPluginActionBindings
+// needs. *tmux.Client satisfies it directly; tests inject a fake.
+type pluginActionBinder interface {
+	BindKey(key string, cmdArgs ...string) error
+}
+
+// installedPluginSetFn is a function that returns the set of currently
+// installed and enabled plugin names. Injected into
+// applyPluginActionBindings so tests can bypass the on-disk registry read.
+type installedPluginSetFn func() map[string]struct{}
+
+// applyPluginActionBindings wires outer tmux root bindings that fire
+// `jin plugin run <name>` for each configured plugin. Idempotent:
+// re-issuing bind-key overwrites the prior mapping. No-op when configMgr
+// is nil, selfBin is empty, or no plugin bindings are configured. Bindings
+// are issued only for plugins currently installed AND enabled
+// (StateEnabled). Uninstalled / broken / incompatible plugins are silently
+// skipped with a single log line each — config vs. installed set drift is
+// common in dev environments and must never block TUI startup. Key
+// collisions with core outer-tmux bindings are warned once (see
+// reservedOuterTmuxKeys) but not blocked; tmux's last-write-wins semantics
+// apply.
+func applyPluginActionBindings(tc pluginActionBinder, configMgr *config.Manager, selfBin string, installedFn installedPluginSetFn) {
+	if configMgr == nil || selfBin == "" || installedFn == nil {
+		return
+	}
+	bindings := configMgr.GetPluginKeybindings()
+	if len(bindings) == 0 {
+		return
+	}
+	installed := installedFn()
+	reserved := reservedOuterTmuxKeys(configMgr)
+	for name, kb := range bindings {
+		if _, ok := installed[name]; !ok {
+			// Runnable() filters to StateEnabled, dropping broken/incompatible/
+			// disabled alike — so "not enabled" is the accurate umbrella.
+			log.Printf("plugin key binding skipped: %s not in the enabled plugin set (uninstalled, disabled, broken, or incompatible)", name)
+			continue
+		}
+		for _, key := range kb.Keys {
+			if key == "" {
+				continue
+			}
+			if other, ok := reserved[key]; ok {
+				log.Printf("plugin %s key %q collides with %s; last binding wins", name, key, other)
+			}
+			runShellCmd := fmt.Sprintf("'%s' plugin run %s", selfBin, name)
+			_ = tc.BindKey(key, "run-shell", runShellCmd)
+		}
+	}
+}
+
+// installedEnabledPluginNames returns the set of plugins currently in
+// StateEnabled from the local registry. Any registry read error is treated
+// as an empty set (no bindings issued) plus a single log line — fail-open,
+// matching the dispatcher's warnOnce policy.
+func installedEnabledPluginNames(pluginsDir string, configMgr *config.Manager) map[string]struct{} {
+	if configMgr == nil {
+		return nil
+	}
+	reg := plugin.NewRegistry(pluginsDir, getStateDir(), configMgr.GetPluginsConfig())
+	entries, err := reg.Runnable()
+	if err != nil {
+		log.Printf("plugin registry load failed: %v (plugin key bindings skipped)", err)
+		return nil
+	}
+	out := make(map[string]struct{}, len(entries))
+	for _, e := range entries {
+		out[e.Name] = struct{}{}
+	}
+	return out
+}
+
+// reservedOuterTmuxKeys builds a lookup of outer-tmux root keys already
+// bound by core features (ActionPanel / TogglePane / SessionFilter). Used
+// to warn on plugin key collisions.
+func reservedOuterTmuxKeys(configMgr *config.Manager) map[string]string {
+	out := map[string]string{}
+	for _, k := range configMgr.GetActionPanelKeys() {
+		if k != "" {
+			out[k] = "core:action-panel"
+		}
+	}
+	for _, k := range configMgr.GetTogglePaneKeys() {
+		if k != "" {
+			out[k] = "core:toggle-pane"
+		}
+	}
+	for _, k := range configMgr.GetSessionFilterKeys() {
+		if k != "" {
+			out[k] = "core:session-filter"
+		}
+	}
+	return out
 }
 
 var tuiCmd = &cobra.Command{
@@ -282,6 +381,9 @@ func createAndAttachTmux(tc *tmux.Client, tuiInnerCmd, agentFlag string) error {
 	selfBin, _ := os.Executable()
 	applyActionPanelBinding(tc, configMgr, selfBin)
 	applySessionFilterBinding(tc, configMgr, selfBin)
+	applyPluginActionBindings(tc, configMgr, selfBin, func() map[string]struct{} {
+		return installedEnabledPluginNames(paths.Plugins(), configMgr)
+	})
 	// Propagate SSH_AUTH_SOCK to tmux session so popups can access it
 	if sshAuthSock := os.Getenv("SSH_AUTH_SOCK"); sshAuthSock != "" {
 		_ = tc.SetEnvironment(tmux.SessionName, "SSH_AUTH_SOCK", sshAuthSock)
@@ -343,6 +445,9 @@ func reattachTmux(tc *tmux.Client, tuiInnerCmd, agentFlag string) error {
 	selfBin, _ := os.Executable()
 	applyActionPanelBinding(tc, configMgr, selfBin)
 	applySessionFilterBinding(tc, configMgr, selfBin)
+	applyPluginActionBindings(tc, configMgr, selfBin, func() map[string]struct{} {
+		return installedEnabledPluginNames(paths.Plugins(), configMgr)
+	})
 
 	return attachToSession(tc)
 }

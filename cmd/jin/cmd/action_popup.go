@@ -29,7 +29,12 @@ var actionPopupCmd = &cobra.Command{
 		if configMgr != nil {
 			reg := plugin.NewRegistry(paths.Plugins(), getStateDir(), configMgr.GetPluginsConfig())
 			if entries, err := reg.Runnable(); err == nil {
-				plugins = action.PluginActions(entries)
+				raw := configMgr.GetPluginKeybindings()
+				pluginKeys := make(map[string][]string, len(raw))
+				for name, kb := range raw {
+					pluginKeys[name] = kb.Keys
+				}
+				plugins = action.PluginActions(entries, pluginKeys)
 			}
 		}
 

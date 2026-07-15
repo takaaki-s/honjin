@@ -22,7 +22,7 @@ type Action struct {
 	Kind         Kind
 	Label        string // display + search text
 	Description  string // optional secondary search text
-	Shortcut     string // right-column hint, empty for plugin or unbound core
+	Shortcut     string // right-column hint, empty when the action has no key bound
 	NeedsSession bool   // core: whether cursor session is required
 }
 
@@ -76,8 +76,14 @@ func CoreActions(kb KeyBindings) []Action {
 // PluginActions maps enabled plugin entries to palette actions. Callers pass
 // the result of Registry.Runnable, which already filters to StateEnabled
 // entries. Description (when the manifest declares one) rides along so the
-// palette fuzzy haystack treats plugin rows like core rows.
-func PluginActions(entries []plugin.Entry) []Action {
+// palette fuzzy haystack treats plugin rows like core rows. pluginKeys maps
+// plugin name to the same key list passed to tmux bind-key (the `.Keys` field
+// of each entry returned by config.Manager.GetPluginKeybindings — callers
+// flatten the map themselves). When a plugin has one or more keys, the first
+// is formatted via FormatKeyHint and shown in the Shortcut column — the same
+// `first(keys)` convention CoreActions uses. A nil / empty pluginKeys map
+// produces plugin rows with empty Shortcut.
+func PluginActions(entries []plugin.Entry, pluginKeys map[string][]string) []Action {
 	out := make([]Action, 0, len(entries))
 	for _, e := range entries {
 		a := Action{
@@ -87,6 +93,9 @@ func PluginActions(entries []plugin.Entry) []Action {
 		}
 		if e.Manifest != nil {
 			a.Description = e.Manifest.Description
+		}
+		if keys := pluginKeys[e.Name]; len(keys) > 0 {
+			a.Shortcut = FormatKeyHint(keys[0])
 		}
 		out = append(out, a)
 	}

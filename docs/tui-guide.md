@@ -176,6 +176,60 @@ keybindings:
   # search: []          # disable entirely (no bind-key issued)
 ```
 
+## Per-plugin Shortcuts
+
+Any installed plugin can be bound to an outer-tmux root key, so pressing the
+key from either pane fires `jin plugin run <name>` immediately — no action
+palette detour, no CLI. The 4th outer-tmux root binding after `toggle_pane`
+/ `action_panel` / `search`, with the same left/right-pane symmetry.
+
+Unlike the core three, there is **no default binding** — the user opts in
+per plugin under `keybindings.plugins.<name>.keys`:
+
+```yaml
+keybindings:
+  plugins:
+    notifier:
+      keys: ["M-n"]              # single key
+    worktree-cleanup:
+      keys: ["M-w", "M-c"]       # multiple keys per plugin
+    # slack-sync:
+    #   keys: []                  # explicit empty ⇒ no binding
+```
+
+Each key must be a **modifier-prefixed** tmux bind-key notation (`M-n`, `C-x`,
+etc.). Bare-letter keys are captured before reaching the display pane and
+would starve the agent of input — the same constraint the other outer-tmux
+bindings enforce.
+
+The tmux command issued is `run-shell '<jin>' plugin run <name>`, which
+returns immediately (the daemon dispatches the plugin asynchronously). If
+the plugin wants to render a popup it does so itself via `jin pane popup
+--here` — the shortcut path is deliberately transparent to the plugin's
+UI, matching how the action palette invokes plugins today.
+
+**Bindings appear in two other places automatically:**
+
+- The action palette (`M-p`) shows the first configured key of each plugin
+  in its Shortcut column, mirroring how core actions display theirs.
+- The help popup (`?`) grows a `Plugins` section listing every plugin whose
+  binding is set. The section is hidden entirely when no plugin bindings
+  are configured, so the help view stays quiet for default installs.
+
+**Edge cases** (handled with fail-open policies, matching `PluginsConfig.Disabled`):
+
+- Plugin listed in config but not installed → bind-key is skipped and one
+  line is logged (`plugin key binding skipped: <name> not installed or
+  disabled`). TUI startup is never blocked by config vs. installed set
+  drift.
+- Same key bound to a core action (`M-p` etc.) → a collision warning is
+  logged. Both bindings are issued and tmux's last-write-wins semantics
+  decide which fires; the plugin binding is typically issued last (see
+  `cmd/jin/cmd/tui.go`), so it wins when both are eligible.
+- Cursor session is **not** passed to the plugin — the shortcut path
+  mirrors action-palette-launched plugins (global action, `--session` empty).
+  Session-aware invocation is left for a future extension.
+
 ## Popup Sizes
 
 Every tmux popup opened by the TUI has a configurable width and height,
