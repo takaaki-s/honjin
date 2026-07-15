@@ -14,7 +14,7 @@ func TestNewHelpModel(t *testing.T) {
 	keys := NewKeyMap(cfg)
 	detachHint := "Ctrl+]"
 
-	m := NewHelpModel(keys, detachHint, "M-p", "/")
+	m := NewHelpModel(keys, detachHint, "M-p", "/", nil)
 
 	// Verify keybindings are set (spot-check a few)
 	if h := m.keys.Up.Help(); h.Key == "" || h.Desc == "" {
@@ -40,7 +40,7 @@ func TestNewHelpModel(t *testing.T) {
 func TestNewHelpModel_EmptyKeyMap(t *testing.T) {
 	// A zero-value KeyMap should still produce a valid model
 	keys := KeyMap{}
-	m := NewHelpModel(keys, "", "", "")
+	m := NewHelpModel(keys, "", "", "", nil)
 
 	if m.detachKeyHint != "" {
 		t.Errorf("detachKeyHint: got %q, want empty", m.detachKeyHint)
@@ -50,7 +50,7 @@ func TestNewHelpModel_EmptyKeyMap(t *testing.T) {
 func TestHelpModel_View(t *testing.T) {
 	cfg := config.DefaultKeybindings()
 	keys := NewKeyMap(cfg)
-	m := NewHelpModel(keys, "Ctrl+]", "M-p", "/")
+	m := NewHelpModel(keys, "Ctrl+]", "M-p", "/", nil)
 
 	view := m.View()
 
@@ -90,7 +90,7 @@ func TestHelpModel_View(t *testing.T) {
 func TestHelpModel_View_KeyLabels(t *testing.T) {
 	cfg := config.DefaultKeybindings()
 	keys := NewKeyMap(cfg)
-	m := NewHelpModel(keys, "Ctrl+]", "M-p", "/")
+	m := NewHelpModel(keys, "Ctrl+]", "M-p", "/", nil)
 
 	view := m.View()
 
@@ -108,12 +108,12 @@ func TestHelpModel_ActionPanelLine(t *testing.T) {
 	cfg := config.DefaultKeybindings()
 	keys := NewKeyMap(cfg)
 
-	withHint := NewHelpModel(keys, "Ctrl+]", "M-p", "/")
+	withHint := NewHelpModel(keys, "Ctrl+]", "M-p", "/", nil)
 	if !strings.Contains(withHint.View(), "open action palette") {
 		t.Error("View() with actionPanelKeyHint set should contain \"open action palette\"")
 	}
 
-	withoutHint := NewHelpModel(keys, "Ctrl+]", "", "/")
+	withoutHint := NewHelpModel(keys, "Ctrl+]", "", "/", nil)
 	if strings.Contains(withoutHint.View(), "open action palette") {
 		t.Error("View() with empty actionPanelKeyHint should not contain \"open action palette\"")
 	}
@@ -123,14 +123,44 @@ func TestHelpModel_SessionFilterLine(t *testing.T) {
 	cfg := config.DefaultKeybindings()
 	keys := NewKeyMap(cfg)
 
-	withHint := NewHelpModel(keys, "Ctrl+]", "M-p", "/")
+	withHint := NewHelpModel(keys, "Ctrl+]", "M-p", "/", nil)
 	if !strings.Contains(withHint.View(), "session filter") {
 		t.Error("View() with sessionFilterKeyHint set should contain \"session filter\"")
 	}
 
-	withoutHint := NewHelpModel(keys, "Ctrl+]", "M-p", "")
+	withoutHint := NewHelpModel(keys, "Ctrl+]", "M-p", "", nil)
 	if strings.Contains(withoutHint.View(), "session filter") {
 		t.Error("View() with empty sessionFilterKeyHint should not contain \"session filter\"")
+	}
+}
+
+func TestHelpModel_PluginsSection(t *testing.T) {
+	cfg := config.DefaultKeybindings()
+	keys := NewKeyMap(cfg)
+
+	// Absent when no plugin hints
+	withoutPlugins := NewHelpModel(keys, "Ctrl+]", "M-p", "/", nil)
+	if strings.Contains(withoutPlugins.View(), "Plugins") {
+		t.Error("View() with no pluginHints should not contain the \"Plugins\" section header")
+	}
+
+	// Present + each hint rendered when pluginHints are supplied
+	hints := []PluginBindingHint{
+		{KeyHint: "Alt+N", Name: "notifier"},
+		{KeyHint: "Alt+W", Name: "worktree-cleanup"},
+	}
+	withPlugins := NewHelpModel(keys, "Ctrl+]", "M-p", "/", hints)
+	view := withPlugins.View()
+	if !strings.Contains(view, "Plugins") {
+		t.Error("View() with pluginHints should contain the \"Plugins\" section header")
+	}
+	for _, ph := range hints {
+		if !strings.Contains(view, ph.KeyHint) {
+			t.Errorf("View() missing plugin KeyHint %q", ph.KeyHint)
+		}
+		if !strings.Contains(view, "plugin: "+ph.Name) {
+			t.Errorf("View() missing plugin name %q", ph.Name)
+		}
 	}
 }
 

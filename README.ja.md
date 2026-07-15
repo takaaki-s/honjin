@@ -282,6 +282,15 @@ keybindings:
   # アタッチ中
   detach: ["ctrl+]"]  # デフォルト: ctrl+]
                        # サポートキー: ctrl+^, ctrl+], ctrl+\, ctrl+g
+  # outer tmux (jin-mgr) — プラグイン単位のアクショントリガー（左右両ペイン）
+  # デフォルト無し。プラグイン単位でユーザーがオプトインする。
+  # tmux `run-shell` 経由で `jin plugin run <name>` を発火するため、popup を
+  # 開くかどうかはプラグイン側の責務（`jin pane popup --here` モデル準拠）。
+  # 未インストールのプラグインは silent skip（log 1 行）。core outer-tmux
+  # バインドとのキー衝突は warning のみ、tmux 後勝ちに従う。
+  plugins:
+    # notifier:         { keys: ["M-n"] }        # 1 打鍵で通知一覧
+    # worktree-cleanup: { keys: ["M-w", "M-c"] } # 複数キー可
 
 # ポップアップサイズ (percent、1-100 の int)。省略した項目はデフォルト値
 # (create/session_filter/action = 70-80) が使われます。全項目と経路は

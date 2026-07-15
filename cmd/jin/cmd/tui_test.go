@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"bytes"
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -142,7 +145,138 @@ func TestApplyActionPanelBinding_ExplicitEmpty(t *testing.T) {
 	}
 }
 
-// --- validateTuiAgentFlag / setTransientAgentEnv ---
+// --- applyPluginActionBindings ---
+// Uses installedFn injection to bypass the on-disk registry read so tests
+// can exercise bind-key issuance without a fixture plugin tree.
+
+// pluginSet is a shorthand for building fake installedPluginSetFn results.
+func pluginSet(names ...string) installedPluginSetFn {
+	return func() map[string]struct{} {
+		out := make(map[string]struct{}, len(names))
+		for _, n := range names {
+			out[n] = struct{}{}
+		}
+		return out
+	}
+}
+
+// withMutedLog silences package log output for the test's lifetime and
+// returns a buffer that captures any messages the code under test emits.
+// Tests that don't need to assert on the log contents just discard the
+// buffer. Not safe with t.Parallel(): stomps process-global log.Writer, so
+// parallel callers would leak each other's output into the returned buffer.
+func withMutedLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return &buf
+}
+
+func TestApplyPluginActionBindings_NilConfigMgrIsNoOp(t *testing.T) {
+	fb := &fakeBinder{}
+	applyPluginActionBindings(fb, nil, "/usr/local/bin/jin", pluginSet("notifier"))
+	if len(fb.calls) != 0 {
+		t.Errorf("expected 0 BindKey calls, got %d: %v", len(fb.calls), fb.calls)
+	}
+}
+
+func TestApplyPluginActionBindings_EmptySelfBinIsNoOp(t *testing.T) {
+	fb := &fakeBinder{}
+	yaml := "keybindings:\n  plugins:\n    notifier: { keys: [\"M-n\"] }\n"
+	applyPluginActionBindings(fb, mgrWithYAML(t, yaml), "", pluginSet("notifier"))
+	if len(fb.calls) != 0 {
+		t.Errorf("expected 0 BindKey calls, got %d: %v", len(fb.calls), fb.calls)
+	}
+}
+
+func TestApplyPluginActionBindings_EmptyBindingsIsNoOp(t *testing.T) {
+	fb := &fakeBinder{}
+	// No keybindings.plugins set — default is no per-plugin bindings.
+	applyPluginActionBindings(fb, mgrWithYAML(t, ""), "/usr/local/bin/jin", pluginSet("notifier"))
+	if len(fb.calls) != 0 {
+		t.Errorf("expected 0 BindKey calls, got %d: %v", len(fb.calls), fb.calls)
+	}
+}
+
+func TestApplyPluginActionBindings_IssuesRunShell(t *testing.T) {
+	fb := &fakeBinder{}
+	yaml := "keybindings:\n  plugins:\n    notifier: { keys: [\"M-n\"] }\n"
+	applyPluginActionBindings(fb, mgrWithYAML(t, yaml), "/usr/local/bin/jin", pluginSet("notifier"))
+	want := [][]string{
+		{"M-n", "run-shell", "'/usr/local/bin/jin' plugin run notifier"},
+	}
+	if !reflect.DeepEqual(fb.calls, want) {
+		t.Errorf("BindKey calls mismatch\n got: %v\nwant: %v", fb.calls, want)
+	}
+}
+
+func TestApplyPluginActionBindings_SkipsUninstalled(t *testing.T) {
+	fb := &fakeBinder{}
+	yaml := "keybindings:\n  plugins:\n    notifier: { keys: [\"M-n\"] }\n"
+	// installed set is empty → notifier is not present → skip.
+	applyPluginActionBindings(fb, mgrWithYAML(t, yaml), "/usr/local/bin/jin", pluginSet())
+	if len(fb.calls) != 0 {
+		t.Errorf("expected 0 BindKey calls for uninstalled plugin, got %d: %v", len(fb.calls), fb.calls)
+	}
+}
+
+func TestApplyPluginActionBindings_EmptyKeyIsSkipped(t *testing.T) {
+	fb := &fakeBinder{}
+	yaml := "keybindings:\n  plugins:\n    notifier: { keys: [\"\", \"M-n\"] }\n"
+	applyPluginActionBindings(fb, mgrWithYAML(t, yaml), "/usr/local/bin/jin", pluginSet("notifier"))
+	want := [][]string{
+		{"M-n", "run-shell", "'/usr/local/bin/jin' plugin run notifier"},
+	}
+	if !reflect.DeepEqual(fb.calls, want) {
+		t.Errorf("BindKey calls mismatch\n got: %v\nwant: %v", fb.calls, want)
+	}
+}
+
+func TestApplyPluginActionBindings_MultipleKeysPerPlugin(t *testing.T) {
+	fb := &fakeBinder{}
+	yaml := "keybindings:\n  plugins:\n    notifier: { keys: [\"M-n\", \"M-!\"] }\n"
+	applyPluginActionBindings(fb, mgrWithYAML(t, yaml), "/usr/local/bin/jin", pluginSet("notifier"))
+	want := [][]string{
+		{"M-n", "run-shell", "'/usr/local/bin/jin' plugin run notifier"},
+		{"M-!", "run-shell", "'/usr/local/bin/jin' plugin run notifier"},
+	}
+	if !reflect.DeepEqual(fb.calls, want) {
+		t.Errorf("BindKey calls mismatch\n got: %v\nwant: %v", fb.calls, want)
+	}
+}
+
+func TestApplyPluginActionBindings_LogsCollisionWithCoreKey(t *testing.T) {
+	// Each row covers a distinct branch of reservedOuterTmuxKeys so a copy/
+	// paste regression on any of the three collectors is caught. Spec F7:
+	// "warn only, bind-key 発行は行う" — tmux last-write-wins decides which
+	// binding actually fires.
+	cases := []struct {
+		name    string
+		yamlKey string // raw string as it appears in the yaml literal (needs \\ escaping for M-\)
+		wantTag string
+	}{
+		{"ActionPanel", "M-p", "core:action-panel"},
+		{"TogglePane", `M-\\`, "core:toggle-pane"},
+		{"SessionFilter", "M-f", "core:session-filter"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := withMutedLog(t)
+			fb := &fakeBinder{}
+			yaml := fmt.Sprintf("keybindings:\n  plugins:\n    notifier: { keys: [\"%s\"] }\n", tc.yamlKey)
+			applyPluginActionBindings(fb, mgrWithYAML(t, yaml), "/usr/local/bin/jin", pluginSet("notifier"))
+
+			if !strings.Contains(buf.String(), "collides with "+tc.wantTag) {
+				t.Errorf("expected collision log against %s, got: %s", tc.wantTag, buf.String())
+			}
+			if len(fb.calls) != 1 {
+				t.Errorf("expected 1 BindKey despite collision, got %d: %v", len(fb.calls), fb.calls)
+			}
+		})
+	}
+}
 
 // withRegistry snapshots the current process-global agent registry (which
 // root.go's blank import of internal/agent/register has already populated

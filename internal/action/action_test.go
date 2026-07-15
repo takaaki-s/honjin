@@ -97,7 +97,7 @@ func TestPluginActions_Basic(t *testing.T) {
 		{Name: "vscode-open"},
 	}
 
-	actions := PluginActions(entries)
+	actions := PluginActions(entries, nil)
 	if len(actions) != len(entries) {
 		t.Fatalf("len(actions) = %d, want %d", len(actions), len(entries))
 	}
@@ -111,11 +111,14 @@ func TestPluginActions_Basic(t *testing.T) {
 		if want := PluginIDPrefix + entries[i].Name; a.ID != want {
 			t.Errorf("actions[%d].ID = %q, want %q", i, a.ID, want)
 		}
+		if a.Shortcut != "" {
+			t.Errorf("actions[%d].Shortcut = %q, want empty (nil pluginKeys)", i, a.Shortcut)
+		}
 	}
 }
 
 func TestPluginActions_Empty(t *testing.T) {
-	actions := PluginActions(nil)
+	actions := PluginActions(nil, nil)
 	if len(actions) != 0 {
 		t.Fatalf("len(actions) = %d, want 0", len(actions))
 	}
@@ -129,13 +132,41 @@ func TestPluginActions_DescriptionFromManifest(t *testing.T) {
 	}
 
 	want := []string{"sends slack notifications", "", ""}
-	actions := PluginActions(entries)
+	actions := PluginActions(entries, nil)
 	if len(actions) != len(entries) {
 		t.Fatalf("len(actions) = %d, want %d", len(actions), len(entries))
 	}
 	for i, a := range actions {
 		if a.Description != want[i] {
 			t.Errorf("actions[%d].Description = %q, want %q", i, a.Description, want[i])
+		}
+	}
+}
+
+func TestPluginActions_ShortcutResolution(t *testing.T) {
+	entries := []plugin.Entry{
+		{Name: "notifier"},         // has binding
+		{Name: "vscode-open"},      // not in pluginKeys
+		{Name: "worktree-cleanup"}, // multiple keys — first is used
+	}
+	pluginKeys := map[string][]string{
+		"notifier":         {"M-n"},
+		"worktree-cleanup": {"M-w", "M-c"},
+	}
+
+	actions := PluginActions(entries, pluginKeys)
+	if len(actions) != 3 {
+		t.Fatalf("len(actions) = %d, want 3", len(actions))
+	}
+
+	want := []string{
+		FormatKeyHint("M-n"),
+		"",
+		FormatKeyHint("M-w"),
+	}
+	for i, a := range actions {
+		if a.Shortcut != want[i] {
+			t.Errorf("actions[%d] (%s).Shortcut = %q, want %q", i, entries[i].Name, a.Shortcut, want[i])
 		}
 	}
 }

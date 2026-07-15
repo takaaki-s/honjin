@@ -8,6 +8,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// PluginBindingHint is a single plugin-shortcut line displayed in the help
+// popup's Plugins section. Callers pre-format KeyHint via
+// action.FormatKeyHint — the help popup itself is presentation-only.
+type PluginBindingHint struct {
+	KeyHint string // e.g. "Alt+N" (already formatted for display)
+	Name    string // plugin name
+}
+
 // HelpModel is a standalone Bubble Tea model for displaying keyboard shortcuts.
 // Designed to run inside a tmux popup and exits on any key press.
 type HelpModel struct {
@@ -15,18 +23,22 @@ type HelpModel struct {
 	detachKeyHint        string
 	actionPanelKeyHint   string
 	sessionFilterKeyHint string
+	pluginHints          []PluginBindingHint
 	width                int
 	height               int
 }
 
 // NewHelpModel creates a new HelpModel with the given KeyMap and outer-tmux
-// binding hints (detach, action panel, session filter popup).
-func NewHelpModel(keys KeyMap, detachKeyHint, actionPanelKeyHint, sessionFilterKeyHint string) HelpModel {
+// binding hints (detach, action panel, session filter popup). pluginHints
+// lists per-plugin shortcuts; pass nil / empty when no plugin bindings are
+// configured — the Plugins section is then omitted entirely.
+func NewHelpModel(keys KeyMap, detachKeyHint, actionPanelKeyHint, sessionFilterKeyHint string, pluginHints []PluginBindingHint) HelpModel {
 	return HelpModel{
 		keys:                 keys,
 		detachKeyHint:        detachKeyHint,
 		actionPanelKeyHint:   actionPanelKeyHint,
 		sessionFilterKeyHint: sessionFilterKeyHint,
+		pluginHints:          pluginHints,
 	}
 }
 
@@ -86,6 +98,15 @@ func (m HelpModel) View() string {
 		writeShortcut(&b, keyStyle, descStyle, m.sessionFilterKeyHint, "session filter (fuzzy)")
 	}
 	b.WriteString("\n")
+
+	if len(m.pluginHints) > 0 {
+		b.WriteString(sectionStyle.Render("Plugins"))
+		b.WriteString("\n")
+		for _, ph := range m.pluginHints {
+			writeShortcut(&b, keyStyle, descStyle, ph.KeyHint, "plugin: "+ph.Name)
+		}
+		b.WriteString("\n")
+	}
 
 	b.WriteString(helpStyle.Render("Press any key to close"))
 
