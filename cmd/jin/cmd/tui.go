@@ -152,7 +152,14 @@ func applyPluginActionBindings(tc actionPanelBinder, configMgr *config.Manager, 
 			log.Printf("plugin key binding skipped: %s not in the enabled plugin set (uninstalled, disabled, broken, or incompatible)", name)
 			continue
 		}
-		runShellCmd := fmt.Sprintf("'%s' plugin run %s", selfBin, name)
+		// `-b` puts the shell in the background (no exit-status wait), and
+		// the explicit `>/dev/null 2>&1` guarantees `Started plugin ...`
+		// (runPluginRun's stdout) never surfaces in the active pane
+		// regardless of tmux version — some tmux builds still route
+		// `run-shell -b` output through view-mode when a captured pane is
+		// available. The daemon dispatches asynchronously so nothing
+		// downstream depends on the CLI's stdout.
+		runShellCmd := fmt.Sprintf("'%s' plugin run %s >/dev/null 2>&1", selfBin, name)
 		for _, key := range kb.Keys {
 			if key == "" {
 				continue
@@ -160,10 +167,6 @@ func applyPluginActionBindings(tc actionPanelBinder, configMgr *config.Manager, 
 			if other, ok := reserved[key]; ok {
 				log.Printf("plugin %s key %q collides with %s; last binding wins", name, key, other)
 			}
-			// `-b` detaches the shell from tmux's copy-mode output viewer so
-			// `Started plugin ...` (runPluginRun stdout) does not surface in
-			// the active pane. The daemon dispatches asynchronously anyway,
-			// so nothing waits on the exit status here.
 			_ = tc.BindKey(key, "run-shell", "-b", runShellCmd)
 		}
 	}
