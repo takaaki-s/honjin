@@ -90,7 +90,7 @@ func initGitRepoWithManifest(t *testing.T, body string) (path, sha string) {
 func registryDoc(t *testing.T, name, repoPath, sha, jinCompat string) []byte {
 	t.Helper()
 	doc := manifest.RegistryDocument{
-		SchemaVersion: manifest.CurrentSchemaVersion,
+		SchemaVersion: manifest.CurrentRegistrySchemaVersion,
 		Plugins: []manifest.RegistryEntry{
 			{
 				Name:          name,
@@ -171,7 +171,7 @@ func TestPluginInstallByNameHonorsPin(t *testing.T) {
 
 	// Two versions in the doc; pin the older one to prove --pin is used.
 	doc := manifest.RegistryDocument{
-		SchemaVersion: manifest.CurrentSchemaVersion,
+		SchemaVersion: manifest.CurrentRegistrySchemaVersion,
 		Plugins: []manifest.RegistryEntry{
 			{
 				Name:          "jind-ai-notifier",

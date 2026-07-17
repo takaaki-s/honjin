@@ -7,6 +7,20 @@ log.
 
 ## 0.9.0
 
+### Bug Fixes
+
+- **`jin plugin ls-remote` and every other registry-consulting `plugin`
+  path work again.** 0.8.0 tightened the plugin manifest's
+  `schema_version` from 1 to 2 (`CurrentSchemaVersion = 2`), but the
+  registry-document parser was sharing that constant, so every shipped
+  0.8.0 binary rejected the live `registry.json` (`schema_version: 1`)
+  with `schema_version 1 not supported (this build understands 2)`.
+  Registry doc and plugin manifest now have independent version
+  constants (`CurrentRegistrySchemaVersion` / `CurrentSchemaVersion`)
+  and a regression test parses a literal
+  `{"schema_version": 1, "plugins": []}` payload so a future manifest
+  bump can never break registry parsing the same way.
+
 ### Features
 
 - **`jin plugin update <name>` now moves an unpinned install to the

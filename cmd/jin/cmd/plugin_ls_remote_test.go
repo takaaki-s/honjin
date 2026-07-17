@@ -39,7 +39,7 @@ func runLsRemoteCmd(t *testing.T, args ...string) (string, string, error) {
 func twoEntryRegistryJSON(t *testing.T) []byte {
 	t.Helper()
 	doc := manifest.RegistryDocument{
-		SchemaVersion: manifest.CurrentSchemaVersion,
+		SchemaVersion: manifest.CurrentRegistrySchemaVersion,
 		GeneratedAt:   time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC),
 		Plugins: []manifest.RegistryEntry{
 			{
@@ -287,7 +287,7 @@ func TestPluginLsRemoteTableRepoWithSchemePassesThrough(t *testing.T) {
 	// or a future http:// mirror) must appear in the table unchanged, not
 	// re-prefixed to "github.com/file://…".
 	doc := manifest.RegistryDocument{
-		SchemaVersion: manifest.CurrentSchemaVersion,
+		SchemaVersion: manifest.CurrentRegistrySchemaVersion,
 		GeneratedAt:   time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC),
 		Plugins: []manifest.RegistryEntry{
 			{
