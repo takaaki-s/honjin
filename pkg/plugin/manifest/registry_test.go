@@ -19,7 +19,7 @@ import (
 func sampleRegistryJSON(t *testing.T, name, latest string) []byte {
 	t.Helper()
 	doc := RegistryDocument{
-		SchemaVersion: CurrentSchemaVersion,
+		SchemaVersion: CurrentRegistrySchemaVersion,
 		GeneratedAt:   time.Date(2026, 7, 13, 0, 0, 0, 0, time.UTC),
 		Plugins: []RegistryEntry{
 			{
@@ -338,7 +338,7 @@ func TestNewClient_RequiresCacheDir(t *testing.T) {
 
 func TestRegistryDocument_Find(t *testing.T) {
 	doc := &RegistryDocument{
-		SchemaVersion: CurrentSchemaVersion,
+		SchemaVersion: CurrentRegistrySchemaVersion,
 		Plugins: []RegistryEntry{
 			{Name: "foo", Repo: "acme/foo", LatestVersion: "1.2.3"},
 		},
@@ -351,6 +351,31 @@ func TestRegistryDocument_Find(t *testing.T) {
 	}
 	if entry := (*RegistryDocument)(nil).Find("foo"); entry != nil {
 		t.Fatalf("find on nil doc should return nil, got %+v", entry)
+	}
+}
+
+// The published crawler emits schema_version: 1. A regression that couples
+// the registry-doc schema to the plugin-manifest schema breaks every shipped
+// jin binary the moment the manifest schema bumps — pin the accepted value
+// literally here so a bump on either side surfaces immediately in CI.
+func TestClient_Load_AcceptsShippedRegistrySchemaVersion(t *testing.T) {
+	body := []byte(`{"schema_version": 1, "generated_at": "2026-07-17T00:00:00Z", "plugins": []}`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(ClientConfig{URL: srv.URL, CacheDir: t.TempDir(), HTTPClient: srv.Client(), Now: fixedClock(time.Now())})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	doc, _, err := c.Load(context.Background(), LoadOptions{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if doc.SchemaVersion != 1 {
+		t.Errorf("doc.SchemaVersion = %d, want 1", doc.SchemaVersion)
 	}
 }
 

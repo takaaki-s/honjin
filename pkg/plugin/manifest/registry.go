@@ -17,6 +17,15 @@ import (
 // override via ClientConfig.URL for staging or a self-hosted mirror.
 const DefaultRegistryURL = "https://takaaki-s.github.io/jind-ai-plugin-registry/registry.json"
 
+// CurrentRegistrySchemaVersion is the newest registry.json schema this build
+// understands. It is intentionally independent of the plugin manifest's
+// schema_version (see pkg/plugin/manifest.CurrentSchemaVersion) — the two
+// documents evolve on separate cadences and were coupled by accident in an
+// earlier release, which made every manifest bump break registry parsing
+// for shipped jin binaries. Keep them decoupled: a manifest schema bump
+// must never require a registry bump, and vice versa.
+const CurrentRegistrySchemaVersion = 1
+
 // DefaultCacheTTL is how long a cached registry.json is considered fresh
 // before the client falls back to a conditional GET.
 const DefaultCacheTTL = 24 * time.Hour
@@ -295,8 +304,8 @@ func parseRegistry(body []byte) (*RegistryDocument, error) {
 	if doc.SchemaVersion == 0 {
 		return nil, errors.New("registry: missing schema_version")
 	}
-	if doc.SchemaVersion != CurrentSchemaVersion {
-		return nil, fmt.Errorf("registry: schema_version %d not supported (this build understands %d)", doc.SchemaVersion, CurrentSchemaVersion)
+	if doc.SchemaVersion != CurrentRegistrySchemaVersion {
+		return nil, fmt.Errorf("registry: schema_version %d not supported (this build understands %d)", doc.SchemaVersion, CurrentRegistrySchemaVersion)
 	}
 	return &doc, nil
 }
