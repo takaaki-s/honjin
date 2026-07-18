@@ -608,12 +608,12 @@ actions:
 この薄いペイロード以上の情報が必要な場合は、jind-ai に問い合わせます:
 
 ```bash
-jin session info "$JIN_SESSION_ID" --json    # full session details
-jin session send "$JIN_SESSION_ID" "..."     # send a prompt
-jin session result "$JIN_SESSION_ID" --json  # structured transcript entries
-jin session focus "$JIN_SESSION_ID"          # make the running TUI display this session
-jin pane popup "$JIN_SESSION_ID" -- <cmd>    # tmux popup over the session's pane
-jin pane popup --here -- <cmd>               # tmux popup over the caller's own pane (uses $TMUX, falling back to JIN_CALLER_TMUX_SOCKET)
+jin session info "$JIN_SESSION_ID" --json    # セッションの詳細情報を取得
+jin session send "$JIN_SESSION_ID" "..."     # プロンプトを送信
+jin session result "$JIN_SESSION_ID" --json  # 構造化された transcript エントリを取得
+jin session focus "$JIN_SESSION_ID"          # 起動中の TUI にこのセッションを表示させる
+jin pane popup "$JIN_SESSION_ID" -- <cmd>    # セッションのペインに tmux popup を重ねる
+jin pane popup --here -- <cmd>               # 呼び出し元自身のペインに tmux popup を重ねる（$TMUX を優先、無ければ JIN_CALLER_TMUX_SOCKET へフォールバック）
 jin pane split "$JIN_SESSION_ID" -- <cmd>
 jin pane capture "$JIN_SESSION_ID"
 jin pane send-keys "$JIN_SESSION_ID" <keys>
@@ -639,7 +639,7 @@ jin plugin install --link ./my-plugin
 
 jin plugin update <name>
 jin plugin remove <name>
-jin plugin list          # NAME / VERSION / STATE / SOURCE; --json for scripting
+jin plugin list          # NAME / VERSION / STATE / SOURCE を表示。--json でスクリプト連携可
 
 # マニフェストの validate — レジストリクローラーと同じチェック
 jin plugin validate                               # デフォルトはカレントディレクトリ

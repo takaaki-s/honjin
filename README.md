@@ -323,19 +323,29 @@ keybindings:
   action_panel: ["M-p"]  # Default: M-p
                           # action_panel: []           to disable
                           # action_panel: ["M-x"]      to rebind
-  # Outer tmux (jin-mgr) — per-plugin action triggers (both panes)
-  # No default — user opts in per plugin. Fires `jin plugin run <name>`
-  # via tmux `run-shell -b` (background, no output to the active pane), so
-  # the plugin itself is responsible for opening any popup (matches the
-  # `jin pane popup --here` model). Uninstalled plugins are silently
-  # skipped with one log line. Key collisions with core outer-tmux
-  # bindings are warned only; tmux last-write-wins.
+  # Outer tmux (jin-mgr) — per-plugin, per-action triggers (both panes)
+  # No default — user opts in per (plugin, action). Fires
+  # `jin plugin run <name> <action>` via tmux `run-shell -b` (background,
+  # no output to the active pane), so opening a popup is the action's own
+  # responsibility (matches the `jin pane popup --here` model). Uninstalled
+  # plugins are silently skipped with one log line. Key collisions with
+  # core outer-tmux bindings are warned only; tmux last-write-wins.
   # Outer-tmux keys accept both tmux notation (`M-n`, `C-f`) and the "+"
   # style (`alt+n`, `ctrl+f`); they are normalized to tmux form at load.
+  # Note: the 0.7.x `plugins.<name>.keys` shape is rejected from 0.8.0
+  # onward — one WARN is logged at startup and the binding is dropped.
+  # Rewrite it as `plugins.<name>.actions.<id>.keys` (shown below).
   plugins:
-    # notifier:         { keys: ["M-n"] }        # 1 打鍵で通知一覧
-    # worktree-cleanup: { keys: ["M-w", "M-c"] } # 複数キー可
-    # journal:          { keys: ["ctrl+f"] }     # "+" style も可
+    # notifier:
+    #   actions:
+    #     default: { keys: ["M-n"] }              # one keystroke → default action
+    #     send-dm: { keys: ["M-d", "C-M-d"] }     # multiple keys / a different action
+    # worktree-cleanup:
+    #   actions:
+    #     default: { keys: ["M-w"] }
+    # journal:
+    #   actions:
+    #     default: { keys: ["ctrl+f"] }           # "+" style also accepted
 
 # Optional: popup sizes (percent, int 1-100). Every entry is optional;
 # omitted popups keep their default (create/session_filter/action = 70-80).
