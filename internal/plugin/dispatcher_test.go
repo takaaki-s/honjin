@@ -351,8 +351,12 @@ popup:
 
 	d.Publish(idleEvent())
 
-	if !waitForFile(t, envDump) {
-		t.Fatal("plugin did not run")
+	// Wait for both env lines, not just for the file: the entrypoint's `>`
+	// redirection creates envDump before `env | grep` writes a byte into it,
+	// so waitForFile alone can hand us an empty file and fail the assertions
+	// below with an empty env dump.
+	if got := waitForLines(t, envDump, 2); got != 2 {
+		t.Fatalf("plugin wrote %d env lines, want 2 (WIDTH and HEIGHT)", got)
 	}
 	data, err := os.ReadFile(envDump)
 	if err != nil {
