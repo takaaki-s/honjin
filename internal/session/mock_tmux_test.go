@@ -62,9 +62,10 @@ type mockTmuxRunner struct {
 	// during the prompt-injection phase.
 	sendKeysLiteralErr map[string]error
 
-	// onHasSession, if set, runs at the start of every HasSession call with
-	// the queried name — invoked WITHOUT mu held, so it may call back into
-	// the Manager (and thus into other mock methods). Recovery probes run
+	// onHasSession, if set, fires ONCE: the next HasSession call consumes it
+	// (under mu, so re-arming from the callback is race-free) and invokes it
+	// with the queried name WITHOUT mu held, so it may call back into the
+	// Manager (and thus into other mock methods) freely. Recovery probes run
 	// without Manager.mu held, so tests use this to mutate manager state
 	// mid-probe and exercise the apply-phase re-validation guards.
 	onHasSession func(name string)
@@ -99,6 +100,7 @@ func (m *mockTmuxRunner) HasSession(name string) bool {
 	m.mu.Lock()
 	m.record("HasSession", name)
 	cb := m.onHasSession
+	m.onHasSession = nil // fire once (see field doc)
 	m.mu.Unlock()
 	if cb != nil {
 		cb(name)

@@ -1347,7 +1347,6 @@ func TestManager_RecoverTmuxSessions_KillDuringProbe(t *testing.T) {
 	sess := setupLivePaneSession(t, mgr, mock, "%21", StatusThinking)
 
 	mock.onHasSession = func(string) {
-		mock.onHasSession = nil // fire once
 		if err := mgr.Kill(sess.ID); err != nil {
 			t.Errorf("Kill failed: %v", err)
 		}
@@ -1375,7 +1374,6 @@ func TestManager_RecoverTmuxSessions_DeleteDuringProbe(t *testing.T) {
 	sess := setupLivePaneSession(t, mgr, mock, "%22", StatusIdle)
 
 	mock.onHasSession = func(string) {
-		mock.onHasSession = nil // fire once
 		if err := mgr.Delete(sess.ID, false, false); err != nil {
 			t.Errorf("Delete failed: %v", err)
 		}
@@ -1414,10 +1412,12 @@ func TestManager_CreateWithOptions_SaveFailure_NotRegistered(t *testing.T) {
 	}
 }
 
-// TestManager_ConcurrentRecoveryAndMutators runs recovery against a
-// concurrent session start and concurrent mutators under -race. No assertions
-// beyond "no race, no panic": the interleavings themselves are the test (the
-// apply-phase guards decide who wins; either order is valid).
+// TestManager_ConcurrentRecoveryAndMutators runs recovery against concurrent
+// mutators under -race, with a session start fired deterministically inside
+// the probe window (via onHasSession) so the apply-phase guards face a real
+// interleaving instead of relying on scheduler luck. The started session must
+// keep its live Running state: recovery snapshotted it windowless (a stale
+// markStopped decision) and the StartedAt guard has to discard that.
 func TestManager_ConcurrentRecoveryAndMutators(t *testing.T) {
 	mgr, mock, _ := newTestManager(t)
 	sess := setupLivePaneSession(t, mgr, mock, "%30", StatusIdle)
@@ -1426,15 +1426,20 @@ func TestManager_ConcurrentRecoveryAndMutators(t *testing.T) {
 		t.Fatalf("create failed: %v", err)
 	}
 
+	// Fires during decideRecovery, after the snapshot and before apply.
+	// Calling StartBackground here is safe: recovery was entered directly,
+	// not via ensureTmuxClient, so tmuxInitMu is not held during the probe.
+	mock.onHasSession = func(string) {
+		if err := mgr.StartBackground(startable.ID); err != nil {
+			t.Errorf("StartBackground failed: %v", err)
+		}
+	}
+
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		mgr.RecoverTmuxSessions()
-	}()
-	go func() {
-		defer wg.Done()
-		_ = mgr.StartBackground(startable.ID)
 	}()
 	for i := 0; i < 6; i++ {
 		wg.Add(1)
@@ -1451,6 +1456,14 @@ func TestManager_ConcurrentRecoveryAndMutators(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+
+	got, ok := mgr.Get(startable.ID)
+	if !ok {
+		t.Fatal("startable session missing after recovery")
+	}
+	if got.Status != StatusRunning {
+		t.Errorf("mid-probe-started session Status = %q, want %q (stale markStopped must be discarded)", got.Status, StatusRunning)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1656,7 +1669,7 @@ func TestManager_EnsureTmuxClient_NotSet(t *testing.T) {
 		t.Fatalf("create failed: %v", err)
 	}
 
-	// StartBackground calls startSession -> ensureTmuxClient internally.
+	// StartBackground calls ensureTmuxClient before locking.
 	// Without a real tmux binary, startSessionTmux will fail in some way.
 	// We mainly want to verify that it does not panic and returns an error.
 	err = mgr.StartBackground(sess.ID)
