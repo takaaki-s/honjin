@@ -41,18 +41,24 @@ type Manager struct {
 	sessions       map[string]*Session
 	store          *Store
 	configMgr      *config.Manager
-	tmuxClient     tmux.Runner // tmux client for session management
+	tmuxClient     tmux.Runner // tmux client; installed once at setup (SetTmuxClient) or lazily (ensureTmuxClient), read without m.mu after that — see SetTmuxClient
 	hookRunner     worktreehook.Runner
 	pluginDisp     plugin.Dispatcher
 	gitClient      *git.Client
 	agentResolver  AgentResolver // resolves AgentKind → Agent adapter (owns Layer C enhancer via Description())
 	mu             sync.RWMutex
 	paneSlotMu     sync.Mutex // serializes named-slot pane operations (find-then-split is check-then-act; see PaneSplit/PaneClose)
+	tmuxInitMu     sync.Mutex // serializes lazy tmux init AND its recovery pass (see ensureTmuxClient)
 	stateDir       string
 	tmuxSocketName string // "" ⇒ tmux.SocketName; tests set an isolated name so ensureTmuxClient does not touch the shared "jin" server
 }
 
 // SetTmuxClient sets the tmux client for tmux-based session management.
+//
+// One-shot setup-time setter: call before the daemon serves requests.
+// tmuxClient is read without m.mu on hot paths (recovery probes, pane
+// polling), which is sound only because after setup the field is written
+// at most once more, by ensureTmuxClient under both tmuxInitMu and m.mu.
 func (m *Manager) SetTmuxClient(tc tmux.Runner) {
 	m.tmuxClient = tc
 }
@@ -109,6 +115,10 @@ func (m *Manager) SetAgentResolver(ar AgentResolver) {
 // apply. applyRecovery re-validates each session against live state, so a
 // session that was deleted, killed, or started while the probes ran keeps its
 // live state (see the guards there).
+//
+// m.tmuxClient is read without m.mu here and in the probe phase: call this
+// only from the goroutine that installed the client (daemon startup before
+// the IPC listener, or the ensureTmuxClient winner).
 func (m *Manager) RecoverTmuxSessions() {
 	if m.tmuxClient == nil {
 		return
@@ -292,7 +302,10 @@ func (m *Manager) applyRecovery(decisions []recoverDecision) (saves []Session, m
 				live.Status = StatusRunning
 			}
 			// Only Status is applied — see the "recover" contract on
-			// StatusSignal.
+			// StatusSignal. The verdict was derived at probe time, so it
+			// can override a status a hook set during the probe window;
+			// accepted, since both read the same agent-side data and the
+			// next hook reconverges.
 			if d.verdictOK {
 				live.Status = d.verdict.Status
 			}
@@ -336,14 +349,23 @@ func (m *Manager) recoverStatusVerdict(session *Session, persisted Status) (Stat
 // Each CC session creates its own tmux session, so no shared session is needed.
 //
 // Must be called WITHOUT m.mu held: on a fresh init it runs recovery, which
-// takes and releases the lock per phase. When two callers race, the check
-// under the lock lets exactly one install the client, and only that winner
-// runs recovery — so captureOutputTmux monitors cannot be spawned twice.
+// takes and releases the lock per phase. tmuxInitMu is held for the whole
+// init INCLUDING that recovery pass, so when two callers race, the loser
+// blocks until the winner's recovery has been applied — its caller then
+// observes post-recovery state (StartBackground's isProcessRunning check
+// depends on this to not double-start a session whose pane is still alive),
+// and recovery runs at most once, so captureOutputTmux monitors cannot be
+// spawned twice.
+//
+// Lock order: tmuxInitMu → m.mu. Nothing takes them in reverse.
 //
 // Uses tmux.SocketName ("jin") in production; tests override via
 // SetTmuxSocketName so an auto-init on the shared socket doesn't leak a
 // server the next daemon start would inherit env from.
 func (m *Manager) ensureTmuxClient() {
+	m.tmuxInitMu.Lock()
+	defer m.tmuxInitMu.Unlock()
+
 	m.mu.RLock()
 	have := m.tmuxClient != nil
 	socketName := m.tmuxSocketName
@@ -354,17 +376,12 @@ func (m *Manager) ensureTmuxClient() {
 	if socketName == "" {
 		socketName = tmux.SocketName
 	}
-	// Probes the PATH for the tmux binary — I/O, so outside the lock.
+	// Probes the PATH for the tmux binary — I/O, so outside m.mu.
 	tc, err := tmux.NewClientWithSocket(socketName)
 	if err != nil {
 		return
 	}
 	m.mu.Lock()
-	if m.tmuxClient != nil {
-		// Lost the init race; the winner runs recovery.
-		m.mu.Unlock()
-		return
-	}
 	m.tmuxClient = tc
 	m.mu.Unlock()
 	debugLog("[TMUX] Inner tmux client initialized (socket: %s)", socketName)
@@ -1470,8 +1487,7 @@ func (m *Manager) startSessionTmux(session *Session) error {
 	}
 
 	// Snapshot the session fields buildAgentShellCmd needs. Reading here is
-	// safe: startSessionTmux runs under StartBackground's m.mu.Lock() (see
-	// callchain StartBackground → startSession → startSessionTmux) so no
+	// safe: startSessionTmux runs under StartBackground's m.mu.Lock(), so no
 	// other goroutine can mutate the session under us.
 	shellCmd, err := m.buildAgentShellCmd(snapshotForSpawn(session, startDir, expandedWorkDir))
 	if err != nil {
@@ -1584,6 +1600,11 @@ func isPersistableWorkDir(path string) bool {
 	return path != "" && git.IsGitRoot(path) && !git.IsClaudeWorktreePath(path)
 }
 
+// captureOutputTmux polls a session's tmux pane every 10 seconds: it detects
+// pane death (retrying a quick resume failure once), tracks the agent's
+// working directory and git branch, and falls back to "idle" when no hook
+// arrives after a fresh start. One goroutine per monitored session; it exits
+// when the session stops or is deleted.
 func (m *Manager) captureOutputTmux(session *Session) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()

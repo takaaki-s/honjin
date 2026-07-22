@@ -1367,11 +1367,35 @@ func TestManager_RecoverTmuxSessions_KillDuringProbe(t *testing.T) {
 	}
 }
 
+// TestManager_RecoverTmuxSessions_DeleteDuringProbe verifies the apply-phase
+// existence guard: a session deleted while the unlocked probes run is
+// silently skipped instead of being resurrected (or dereferenced as nil).
+func TestManager_RecoverTmuxSessions_DeleteDuringProbe(t *testing.T) {
+	mgr, mock, _ := newTestManager(t)
+	sess := setupLivePaneSession(t, mgr, mock, "%22", StatusIdle)
+
+	mock.onHasSession = func(string) {
+		mock.onHasSession = nil // fire once
+		if err := mgr.Delete(sess.ID, false, false); err != nil {
+			t.Errorf("Delete failed: %v", err)
+		}
+	}
+
+	mgr.RecoverTmuxSessions()
+
+	if _, ok := mgr.Get(sess.ID); ok {
+		t.Error("session still present after mid-probe delete")
+	}
+}
+
 // TestManager_CreateWithOptions_SaveFailure_NotRegistered verifies the
 // compensating delete: when the store write fails, the session must not stay
 // registered, preserving the invariant that a returned session is both
 // registered and persisted.
 func TestManager_CreateWithOptions_SaveFailure_NotRegistered(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; chmod cannot make the dir unwritable")
+	}
 	mgr, _, _ := newTestManager(t)
 
 	// Store.Save creates its temp file inside the data dir; removing the
@@ -1390,19 +1414,27 @@ func TestManager_CreateWithOptions_SaveFailure_NotRegistered(t *testing.T) {
 	}
 }
 
-// TestManager_ConcurrentRecoveryAndMutators runs recovery against concurrent
-// mutators under -race. No assertions beyond "no race, no panic": the
-// interleavings themselves are the test. Only the recovery goroutine touches
-// the tmux mock (the mock is not synchronized).
+// TestManager_ConcurrentRecoveryAndMutators runs recovery against a
+// concurrent session start and concurrent mutators under -race. No assertions
+// beyond "no race, no panic": the interleavings themselves are the test (the
+// apply-phase guards decide who wins; either order is valid).
 func TestManager_ConcurrentRecoveryAndMutators(t *testing.T) {
 	mgr, mock, _ := newTestManager(t)
 	sess := setupLivePaneSession(t, mgr, mock, "%30", StatusIdle)
+	startable, _, err := mgr.CreateWithOptions(CreateOptions{WorkDir: t.TempDir(), Description: "startable"})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		mgr.RecoverTmuxSessions()
+	}()
+	go func() {
+		defer wg.Done()
+		_ = mgr.StartBackground(startable.ID)
 	}()
 	for i := 0; i < 6; i++ {
 		wg.Add(1)
