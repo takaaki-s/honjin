@@ -1308,6 +1308,164 @@ func TestManager_RecoverTmuxSessions_NoTmux(t *testing.T) {
 	}
 }
 
+// TestManager_RecoverTmuxSessions_SkipsSessionStartedByThisDaemon verifies
+// the apply-phase StartedAt guard: a non-zero StartedAt means this daemon
+// process started the session itself, so a recovery decision derived from
+// pre-restart observations must not be applied. The probe here reports the
+// window gone — without the guard, recovery would clear TmuxWindowName and
+// stop the freshly started session.
+func TestManager_RecoverTmuxSessions_SkipsSessionStartedByThisDaemon(t *testing.T) {
+	mgr, mock, _ := newTestManager(t)
+	sess := setupLivePaneSession(t, mgr, mock, "%20", "")
+
+	mgr.mu.Lock()
+	windowName := sess.TmuxWindowName
+	sess.Status = StatusRunning
+	sess.StartedAt = time.Now()
+	mgr.mu.Unlock()
+	mock.sessions[windowName] = false // probe would conclude recoverWindowGone
+
+	mgr.RecoverTmuxSessions()
+
+	got, ok := mgr.Get(sess.ID)
+	if !ok {
+		t.Fatal("Get returned ok=false")
+	}
+	if got.Status != StatusRunning {
+		t.Errorf("Status = %q, want untouched %q", got.Status, StatusRunning)
+	}
+	if got.TmuxWindowName != windowName {
+		t.Errorf("TmuxWindowName = %q, want untouched %q", got.TmuxWindowName, windowName)
+	}
+}
+
+// TestManager_RecoverTmuxSessions_KillDuringProbe verifies the apply-phase
+// TmuxWindowName re-validation: a session killed while the unlocked probes
+// run must not be resurrected by the stale "pane alive" observation.
+func TestManager_RecoverTmuxSessions_KillDuringProbe(t *testing.T) {
+	mgr, mock, _ := newTestManager(t)
+	sess := setupLivePaneSession(t, mgr, mock, "%21", StatusThinking)
+
+	mock.onHasSession = func(string) {
+		if err := mgr.Kill(sess.ID); err != nil {
+			t.Errorf("Kill failed: %v", err)
+		}
+	}
+
+	mgr.RecoverTmuxSessions()
+
+	got, ok := mgr.Get(sess.ID)
+	if !ok {
+		t.Fatal("Get returned ok=false")
+	}
+	if got.Status != StatusStopped {
+		t.Errorf("Status = %q, want %q (killed mid-probe)", got.Status, StatusStopped)
+	}
+	if got.TmuxWindowName != "" {
+		t.Errorf("TmuxWindowName = %q, want cleared", got.TmuxWindowName)
+	}
+}
+
+// TestManager_RecoverTmuxSessions_DeleteDuringProbe verifies the apply-phase
+// existence guard: a session deleted while the unlocked probes run is
+// silently skipped instead of being resurrected (or dereferenced as nil).
+func TestManager_RecoverTmuxSessions_DeleteDuringProbe(t *testing.T) {
+	mgr, mock, _ := newTestManager(t)
+	sess := setupLivePaneSession(t, mgr, mock, "%22", StatusIdle)
+
+	mock.onHasSession = func(string) {
+		if err := mgr.Delete(sess.ID, false, false); err != nil {
+			t.Errorf("Delete failed: %v", err)
+		}
+	}
+
+	mgr.RecoverTmuxSessions()
+
+	if _, ok := mgr.Get(sess.ID); ok {
+		t.Error("session still present after mid-probe delete")
+	}
+}
+
+// TestManager_CreateWithOptions_SaveFailure_NotRegistered verifies the
+// compensating delete: when the store write fails, the session must not stay
+// registered, preserving the invariant that a returned session is both
+// registered and persisted.
+func TestManager_CreateWithOptions_SaveFailure_NotRegistered(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; chmod cannot make the dir unwritable")
+	}
+	mgr, _, _ := newTestManager(t)
+
+	// Store.Save creates its temp file inside the data dir; removing the
+	// write bit forces the failure.
+	if err := os.Chmod(mgr.store.dataDir, 0o500); err != nil {
+		t.Fatalf("chmod failed: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(mgr.store.dataDir, 0o700) })
+
+	_, _, err := mgr.CreateWithOptions(CreateOptions{WorkDir: "/tmp/save-fail"})
+	if err == nil {
+		t.Fatal("expected error when store dir is unwritable")
+	}
+	if n := len(mgr.List()); n != 0 {
+		t.Errorf("got %d registered sessions after failed save, want 0", n)
+	}
+}
+
+// TestManager_ConcurrentRecoveryAndMutators runs recovery against concurrent
+// mutators under -race, with a session start fired deterministically inside
+// the probe window (via onHasSession) so the apply-phase guards face a real
+// interleaving instead of relying on scheduler luck. The started session must
+// keep its live Running state: recovery snapshotted it windowless (a stale
+// markStopped decision) and the StartedAt guard has to discard that.
+func TestManager_ConcurrentRecoveryAndMutators(t *testing.T) {
+	mgr, mock, _ := newTestManager(t)
+	sess := setupLivePaneSession(t, mgr, mock, "%30", StatusIdle)
+	startable, _, err := mgr.CreateWithOptions(CreateOptions{WorkDir: t.TempDir(), Description: "startable"})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Fires during decideRecovery, after the snapshot and before apply.
+	// Calling StartBackground here is safe: recovery was entered directly,
+	// not via ensureTmuxClient, so tmuxInitMu is not held during the probe.
+	mock.onHasSession = func(string) {
+		if err := mgr.StartBackground(startable.ID); err != nil {
+			t.Errorf("StartBackground failed: %v", err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		mgr.RecoverTmuxSessions()
+	}()
+	for i := 0; i < 6; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			switch n % 3 {
+			case 0:
+				mgr.SetStatusWithError(sess.ID, StatusThinking, "")
+			case 1:
+				_ = mgr.SetDescription(sess.ID, fmt.Sprintf("desc-%d", n))
+			case 2:
+				_ = mgr.SetWorkDir(sess.ID, "")
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	got, ok := mgr.Get(startable.ID)
+	if !ok {
+		t.Fatal("startable session missing after recovery")
+	}
+	if got.Status != StatusRunning {
+		t.Errorf("mid-probe-started session Status = %q, want %q (stale markStopped must be discarded)", got.Status, StatusRunning)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // FindByAgentSessionID tests
 // ---------------------------------------------------------------------------
@@ -1511,7 +1669,7 @@ func TestManager_EnsureTmuxClient_NotSet(t *testing.T) {
 		t.Fatalf("create failed: %v", err)
 	}
 
-	// StartBackground calls startSession -> ensureTmuxClient internally.
+	// StartBackground calls ensureTmuxClient before locking.
 	// Without a real tmux binary, startSessionTmux will fail in some way.
 	// We mainly want to verify that it does not panic and returns an error.
 	err = mgr.StartBackground(sess.ID)
