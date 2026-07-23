@@ -66,19 +66,6 @@ func hasTmuxSession(name string) bool {
 	return tc.HasSession(name)
 }
 
-// cleanupTmuxSessions kills all sessions on the per-test tmux socket named in
-// JIN_TMUX_SOCKET by isolateTmuxSocket. The setup helper is the sole source of
-// truth for the socket name, so this must NEVER fall back to tmux.SocketName —
-// doing so would kill the shared "-L jin" server the user is attached to.
-func cleanupTmuxSessions(t *testing.T) {
-	t.Helper()
-	name := os.Getenv("JIN_TMUX_SOCKET")
-	if name == "" {
-		t.Fatalf("cleanupTmuxSessions: JIN_TMUX_SOCKET is unset — call setupE2E/setupE2EWithDataDir before cleanup")
-	}
-	_ = exec.Command("tmux", "-L", name, "kill-server").Run()
-}
-
 // waitForStatus polls client.List until the session reaches the expected status or times out.
 func waitForStatus(t *testing.T, client *daemon.Client, sessionID string, want session.Status, timeout time.Duration) {
 	t.Helper()
@@ -108,8 +95,6 @@ func waitForStatus(t *testing.T, client *daemon.Client, sessionID string, want s
 // --- tests ---
 
 func TestE2E_TmuxSessionCreation(t *testing.T) {
-	t.Cleanup(func() { cleanupTmuxSessions(t) })
-
 	client := setupE2E(t)
 
 	info, _, err := client.NewWithOptions(daemon.NewOptions{
@@ -138,8 +123,6 @@ func TestE2E_TmuxSessionCreation(t *testing.T) {
 }
 
 func TestE2E_KillWithTmuxCleanup(t *testing.T) {
-	t.Cleanup(func() { cleanupTmuxSessions(t) })
-
 	client := setupE2E(t)
 
 	info, _, err := client.NewWithOptions(daemon.NewOptions{
@@ -183,8 +166,6 @@ func TestE2E_KillWithTmuxCleanup(t *testing.T) {
 }
 
 func TestE2E_DeleteWithTmuxCleanup(t *testing.T) {
-	t.Cleanup(func() { cleanupTmuxSessions(t) })
-
 	client := setupE2E(t)
 
 	info, _, err := client.NewWithOptions(daemon.NewOptions{
@@ -225,8 +206,6 @@ func TestE2E_DeleteWithTmuxCleanup(t *testing.T) {
 }
 
 func TestE2E_SessionDataPersistence(t *testing.T) {
-	t.Cleanup(func() { cleanupTmuxSessions(t) })
-
 	tmpDir := t.TempDir()
 	dataDir := filepath.Join(tmpDir, "sessions")
 	configDir := filepath.Join(tmpDir, "config")
@@ -280,8 +259,6 @@ func TestE2E_SessionDataPersistence(t *testing.T) {
 }
 
 func TestE2E_SessionRecovery(t *testing.T) {
-	t.Cleanup(func() { cleanupTmuxSessions(t) })
-
 	tmpDir := t.TempDir()
 	dataDir := filepath.Join(tmpDir, "sessions")
 	configDir := filepath.Join(tmpDir, "config")
@@ -346,8 +323,6 @@ func TestE2E_SessionRecovery(t *testing.T) {
 }
 
 func TestE2E_MultipleSessionsTmux(t *testing.T) {
-	t.Cleanup(func() { cleanupTmuxSessions(t) })
-
 	client := setupE2E(t)
 
 	// Create 3 sessions
@@ -411,8 +386,6 @@ func TestE2E_MultipleSessionsTmux(t *testing.T) {
 }
 
 func TestE2E_HookCWDUpdateOnStartedSession(t *testing.T) {
-	t.Cleanup(func() { cleanupTmuxSessions(t) })
-
 	client := setupE2E(t)
 
 	info, _, err := client.NewWithOptions(daemon.NewOptions{
@@ -493,8 +466,6 @@ func setupGitWorktree(t *testing.T) (string, string) {
 }
 
 func TestE2E_DeleteWithWorktreeCleanup(t *testing.T) {
-	t.Cleanup(func() { cleanupTmuxSessions(t) })
-
 	client := setupE2E(t)
 	_, worktreeDir := setupGitWorktree(t)
 
@@ -527,8 +498,6 @@ func TestE2E_DeleteWithWorktreeCleanup(t *testing.T) {
 }
 
 func TestE2E_DeleteWithoutWorktreeCleanup(t *testing.T) {
-	t.Cleanup(func() { cleanupTmuxSessions(t) })
-
 	client := setupE2E(t)
 	_, worktreeDir := setupGitWorktree(t)
 
@@ -561,8 +530,6 @@ func TestE2E_DeleteWithoutWorktreeCleanup(t *testing.T) {
 }
 
 func TestE2E_DeleteWorktreeDirty(t *testing.T) {
-	t.Cleanup(func() { cleanupTmuxSessions(t) })
-
 	client := setupE2E(t)
 	_, worktreeDir := setupGitWorktree(t)
 
@@ -624,8 +591,6 @@ func TestE2E_DeleteWorktreeDirty(t *testing.T) {
 }
 
 func TestE2E_DeleteWorktreeAlreadyRemoved(t *testing.T) {
-	t.Cleanup(func() { cleanupTmuxSessions(t) })
-
 	client := setupE2E(t)
 	_, worktreeDir := setupGitWorktree(t)
 
