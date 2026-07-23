@@ -62,6 +62,14 @@ type mockTmuxRunner struct {
 	// during the prompt-injection phase.
 	sendKeysLiteralErr map[string]error
 
+	// sendKeysErr injects an error for SendKeys keyed by the "keys" arg
+	// (not the target), so tests can fail a specific key sequence
+	// regardless of pane — for example error only on the adapter's
+	// ClearInputKeys "C-u" while letting the final "Enter" succeed.
+	// Absent/nil entries return nil, matching the default SendKeys
+	// behaviour.
+	sendKeysErr map[string]error
+
 	// onHasSession, if set, fires ONCE: the next HasSession call consumes it
 	// (under mu, so re-arming from the callback is race-free) and invokes it
 	// with the queried name WITHOUT mu held, so it may call back into the
@@ -88,6 +96,7 @@ func newMockTmuxRunner() *mockTmuxRunner {
 		captureErrAfter:    make(map[string]error),
 		captureCallCount:   make(map[string]int),
 		sendKeysLiteralErr: make(map[string]error),
+		sendKeysErr:        make(map[string]error),
 	}
 }
 
@@ -185,6 +194,9 @@ func (m *mockTmuxRunner) SendKeys(target, keys string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.record("SendKeys", target, keys)
+	if err, ok := m.sendKeysErr[keys]; ok && err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -265,4 +277,57 @@ func (m *mockTmuxRunner) hasCalledWith(method, arg string) bool {
 		}
 	}
 	return false
+}
+
+// countCallsWithArgs returns how many calls the mock recorded to method
+// whose arg list matches args exactly. Passing zero args matches only
+// recorded calls with zero args (use hasCalledWith / countCalls for
+// target-only matching). Used by SendPrompt tests to distinguish
+// SendKeys(pane, "C-u") from SendKeys(pane, "Enter") — hasCalledWith /
+// countCalls only look at the first arg (the target).
+func (m *mockTmuxRunner) countCallsWithArgs(method string, args ...string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, c := range m.calls {
+		if c.method != method || len(c.args) != len(args) {
+			continue
+		}
+		match := true
+		for i := range args {
+			if c.args[i] != args[i] {
+				match = false
+				break
+			}
+		}
+		if match {
+			n++
+		}
+	}
+	return n
+}
+
+// firstCallIndex returns the index of the first recorded call to method
+// whose arg list matches args exactly, or -1 if not found. Used to assert
+// ordering between two calls (e.g. clear-key SendKeys must precede
+// SendKeysLiteral). Caller must hold no locks on the mock.
+func (m *mockTmuxRunner) firstCallIndex(method string, args ...string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, c := range m.calls {
+		if c.method != method || len(c.args) != len(args) {
+			continue
+		}
+		match := true
+		for j := range args {
+			if c.args[j] != args[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
 }

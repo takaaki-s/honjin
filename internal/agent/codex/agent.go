@@ -79,3 +79,11 @@ func (a *Agent) StatusSource() agent.StatusSource { return a.statusSrc }
 // Description returns the cached Layer C-transcript enhancer that pulls
 // the first genuine user prompt out of the rollout JSONL.
 func (a *Agent) Description() agent.DescriptionSource { return a.enhancer }
+
+// ClearInputKeys returns the tmux key sequence Manager.SendPrompt sends
+// before each attempt to wipe Codex's input line to empty, preventing
+// residual text from concatenating with the new prompt. C-u is the standard
+// readline kill-line binding and Codex's TUI honours it. Adapters may
+// return nil to opt out; empty here would mean "opt out" and disable the
+// residual-concat protection for codex sessions.
+func (a *Agent) ClearInputKeys() []string { return []string{"C-u"} }

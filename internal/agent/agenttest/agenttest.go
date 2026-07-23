@@ -12,13 +12,16 @@ import (
 )
 
 // StubAgent is a minimal Agent implementation for tests. Zero-value works;
-// the callbacks are optional and default to sensible no-ops.
+// the callbacks are optional and default to sensible no-ops. ClearKeys is
+// nil by default (opt-out of the SendPrompt input-area clear, matching what
+// most tests want — production adapters set their own keys).
 type StubAgent struct {
 	KindStr     string
 	SpawnFn     func(session.SpawnOptions) session.SpawnPlan
 	InterpretFn func(session.StatusSignal) (session.StatusUpdate, bool)
 	SetupFn     func(session.SetupContext) error
 	DescribeFn  session.DescriptionEnhancer
+	ClearKeys   []string
 }
 
 func (s *StubAgent) Kind() string {
@@ -45,6 +48,8 @@ func (s *StubAgent) SpawnCommand(opts session.SpawnOptions) session.SpawnPlan {
 func (s *StubAgent) StatusSource() session.StatusSource { return statusSourceFn(s.InterpretFn) }
 
 func (s *StubAgent) Description() session.DescriptionEnhancer { return s.DescribeFn }
+
+func (s *StubAgent) ClearInputKeys() []string { return s.ClearKeys }
 
 type statusSourceFn func(session.StatusSignal) (session.StatusUpdate, bool)
 

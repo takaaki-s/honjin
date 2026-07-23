@@ -47,18 +47,22 @@ Common pitfalls and caveats that agents tend to fall into.
   because the check compares occurrence counts before/after, not mere
   presence.
 
-- **Verify guarantees "the tail landed", not "exactly the prompt landed once".**
-  If a TUI accepts a strict prefix of the keys on the first attempt and
-  drops the rest, the retry re-sends the full prompt and the input area
-  ends up carrying `<prefix><full prompt>`. Verify still passes (the tail
-  appears one more time than before) and Enter commits the concatenated
-  form. We accept the risk in transport because the fixes we considered
-  (kill-line before each retry, echo-diff on the exact prompt) all leak
-  per-TUI assumptions into the agent-agnostic layer. In practice tmux
-  `send-keys` tends to deliver keystrokes atomically, so we have not
-  observed corruption against Claude Code or Codex — but if it ever
-  shows up (garbled first message on a slow-startup pane), that is
-  the escape hatch to revisit.
+- **Input-area clear per attempt suppresses residual-concat corruption.**
+  `Manager.SendPrompt` sends the key sequence returned by the adapter's
+  `ClearInputKeys()` — currently `["C-u"]` for claude / codex / opencode —
+  before each attempt's baseline capture, so any residual text in the TUI's
+  input area (previous user typing, or a strict-prefix fragment left over
+  when a first attempt was partially delivered and dropped the rest) is
+  wiped before the new prompt lands. Without this step, the verify path
+  ("did the tail appear one more time than before?") happily passes on a
+  concatenated buffer, and Enter commits `<residual><prompt>`. Adapters
+  that return nil or an empty slice from `ClearInputKeys()` opt out and
+  fall through to the pre-refactor behaviour, inheriting the
+  residual-concat risk. A visible side effect on covered adapters: a user
+  manually attached to the tmux pane (`tmux attach -t jin`) mid-typing
+  will see their input erased when `SendPrompt` is invoked externally.
+  This is deliberate — the input area belongs to the transport layer
+  during a send.
 
 ## Hook
 
