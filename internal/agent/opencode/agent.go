@@ -97,3 +97,11 @@ func (a *Agent) StatusSource() agent.StatusSource { return a.statusSrc }
 // today, so sessions keep whatever description Layer A/B derived. The
 // interface explicitly permits nil here.
 func (a *Agent) Description() agent.DescriptionSource { return nil }
+
+// ClearInputKeys returns the tmux key sequence Manager.SendPrompt sends
+// before each attempt to wipe opencode's input line to empty, preventing
+// residual text from concatenating with the new prompt. C-u empties the
+// input line, verified against opencode 1.17.18. Adapters may return nil to
+// opt out; empty here would mean "opt out" and disable the residual-concat
+// protection for opencode sessions.
+func (a *Agent) ClearInputKeys() []string { return []string{"C-u"} }

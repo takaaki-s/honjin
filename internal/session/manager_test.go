@@ -51,7 +51,8 @@ func newTestManager(t *testing.T) (*Manager, *mockTmuxRunner, *mockHookRunner) {
 // tests that exercise Layer C swap it via installEnhancer (which reaches
 // into the fakeAgentResolver held by newTestManager).
 type fakeAgent struct {
-	enhancer DescriptionEnhancer
+	enhancer  DescriptionEnhancer
+	clearKeys []string // returned from ClearInputKeys; nil = opt-out (matches production default)
 }
 
 func (a *fakeAgent) Kind() string                        { return "claude" }
@@ -59,6 +60,7 @@ func (a *fakeAgent) Setup(SetupContext) error            { return nil }
 func (a *fakeAgent) SpawnCommand(SpawnOptions) SpawnPlan { return SpawnPlan{Command: "claude"} }
 func (a *fakeAgent) Description() DescriptionEnhancer    { return a.enhancer }
 func (a *fakeAgent) StatusSource() StatusSource          { return fakeStatusSource{} }
+func (a *fakeAgent) ClearInputKeys() []string            { return a.clearKeys }
 
 type fakeStatusSource struct{}
 
@@ -124,6 +126,26 @@ func installEnhancer(t *testing.T, mgr *Manager, enh DescriptionEnhancer) {
 		t.Fatalf(`expected "claude" adapter to be *fakeAgent, got %T`, resolver.agents["claude"])
 	}
 	ag.enhancer = enh
+}
+
+// installClearKeys mutates the resolver's "claude" adapter so
+// ClearInputKeys returns the given keys. Tests that need to exercise the
+// SendPrompt clear path call this after newTestManager and before
+// SendPrompt. Passing an empty (or nil) slice covers the "adapter returns
+// no keys" opt-out variant. The baseline fakeAgent's clearKeys defaults to
+// nil, so tests that never call this observe the fall-through path (that
+// invariant is what keeps the existing verify-by-capture tests intact).
+func installClearKeys(t *testing.T, mgr *Manager, keys []string) {
+	t.Helper()
+	resolver, ok := mgr.agentResolver.(*fakeAgentResolver)
+	if !ok {
+		t.Fatalf("expected *fakeAgentResolver, got %T", mgr.agentResolver)
+	}
+	ag, ok := resolver.agents["claude"].(*fakeAgent)
+	if !ok {
+		t.Fatalf(`expected "claude" adapter to be *fakeAgent, got %T`, resolver.agents["claude"])
+	}
+	ag.clearKeys = keys
 }
 
 // ---------------------------------------------------------------------------
@@ -3455,6 +3477,16 @@ func withShortSendVerify(t *testing.T, timeout, settle, backoff time.Duration) {
 	})
 }
 
+// withShortSendClear shortens sendClearSettleDelay so clear-key tests
+// don't pay the 20ms per-attempt production delay repeatedly. Same
+// package-var-rewrite caveat as withShortSendVerify — not t.Parallel-safe.
+func withShortSendClear(t *testing.T, settle time.Duration) {
+	t.Helper()
+	orig := sendClearSettleDelay
+	sendClearSettleDelay = settle
+	t.Cleanup(func() { sendClearSettleDelay = orig })
+}
+
 // newIdleSessionWithPane creates a session, marks it idle and pins the given
 // tmux pane ID onto it — the pre-conditions SendPrompt requires.
 func newIdleSessionWithPane(t *testing.T, mgr *Manager, workDir, description, paneID string) *Session {
@@ -3679,6 +3711,230 @@ func TestSendPrompt_Preconditions(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSendPrompt_ResidualClearedByAdapter asserts that when the resolved
+// adapter's ClearInputKeys returns a non-empty sequence, SendPrompt sends
+// those keys BEFORE each attempt's SendKeysLiteral so residual input cannot
+// concatenate with the new prompt. Verified at the call-log level: the
+// first C-u must precede the first SendKeysLiteral, and Enter must fire
+// only after verify passes.
+func TestSendPrompt_ResidualClearedByAdapter(t *testing.T) {
+	mgr, mock, _ := newTestManager(t)
+	withShortSendVerify(t, 2*time.Second, time.Millisecond, time.Millisecond)
+	withShortSendClear(t, time.Millisecond)
+	installClearKeys(t, mgr, []string{"C-u"})
+
+	const pane = "%clr1"
+	const prompt = "SENTINEL9 say ok"
+	sess := newIdleSessionWithPane(t, mgr, "/tmp/send-clear-basic", "clr1", pane)
+
+	mock.capturedSequence[pane] = []string{
+		"$ ",                 // before — post-clear, empty
+		"$ SENTINEL9 say ok", // after  — prompt landed
+	}
+
+	if err := mgr.SendPrompt(sess.ID, prompt); err != nil {
+		t.Fatalf("SendPrompt returned err=%v, want nil", err)
+	}
+
+	// C-u must fire at least once per attempt; we only did one, so exactly one.
+	if got := mock.countCallsWithArgs("SendKeys", pane, "C-u"); got != 1 {
+		t.Errorf("SendKeys(%q, %q) count = %d, want 1", pane, "C-u", got)
+	}
+	// Enter fires exactly once at the end.
+	if got := mock.countCallsWithArgs("SendKeys", pane, "Enter"); got != 1 {
+		t.Errorf("SendKeys(%q, %q) count = %d, want 1", pane, "Enter", got)
+	}
+	// Ordering: C-u before the prompt literal, prompt literal before Enter.
+	clearIdx := mock.firstCallIndex("SendKeys", pane, "C-u")
+	litIdx := mock.firstCallIndex("SendKeysLiteral", pane, prompt)
+	enterIdx := mock.firstCallIndex("SendKeys", pane, "Enter")
+	if clearIdx < 0 || litIdx < 0 || enterIdx < 0 {
+		t.Fatalf("missing calls: clearIdx=%d litIdx=%d enterIdx=%d", clearIdx, litIdx, enterIdx)
+	}
+	if !(clearIdx < litIdx && litIdx < enterIdx) {
+		t.Errorf("call order violated: C-u@%d < prompt@%d < Enter@%d expected", clearIdx, litIdx, enterIdx)
+	}
+	// Baseline capture happens AFTER the clear on every attempt, so the
+	// clear must precede the first CapturePane too.
+	firstCapIdx := mock.firstCallIndex("CapturePane", pane)
+	if firstCapIdx < 0 || clearIdx >= firstCapIdx {
+		t.Errorf("clear (idx=%d) must precede first CapturePane (idx=%d)", clearIdx, firstCapIdx)
+	}
+}
+
+// TestSendPrompt_ResidualClearedOnRetry asserts that the clear key sequence
+// fires again on each retry, not just the first attempt — so a TUI that
+// eats a strict prefix from attempt 1 sees a fresh empty input line at
+// attempt 2 as well.
+func TestSendPrompt_ResidualClearedOnRetry(t *testing.T) {
+	mgr, mock, _ := newTestManager(t)
+	withShortSendVerify(t, 2*time.Second, time.Millisecond, time.Millisecond)
+	withShortSendClear(t, time.Millisecond)
+	installClearKeys(t, mgr, []string{"C-u"})
+
+	const pane = "%clr2"
+	const prompt = "please build the report"
+	sess := newIdleSessionWithPane(t, mgr, "/tmp/send-clear-retry", "clr2", pane)
+
+	// Attempt 1: miss. Attempt 2: hit.
+	mock.capturedSequence[pane] = []string{
+		"$ ",                        // before1 (post-clear)
+		"$ ",                        // after1  — dropped keys, verify miss
+		"$ ",                        // before2 (post-clear again)
+		"$ please build the report", // after2  — landed
+	}
+
+	if err := mgr.SendPrompt(sess.ID, prompt); err != nil {
+		t.Fatalf("SendPrompt returned err=%v, want nil", err)
+	}
+	// Two attempts → two C-u sends → two SendKeysLiteral, one Enter.
+	if got := mock.countCallsWithArgs("SendKeys", pane, "C-u"); got != 2 {
+		t.Errorf("SendKeys(%q, %q) count = %d, want 2 (initial + 1 retry)", pane, "C-u", got)
+	}
+	if got := countCalls(mock, "SendKeysLiteral", pane); got != 2 {
+		t.Errorf("SendKeysLiteral called %d times, want 2 (initial + 1 retry)", got)
+	}
+	if got := mock.countCallsWithArgs("SendKeys", pane, "Enter"); got != 1 {
+		t.Errorf("SendKeys(%q, %q) count = %d, want 1", pane, "Enter", got)
+	}
+}
+
+// TestSendPrompt_MultipleClearKeysAllSentInOrder asserts that when
+// ClearInputKeys returns more than one key (the fallback shape reserved
+// for TUIs where C-u is bound to something else — 02_design D3 lists
+// ["C-a", "C-k"] as the concrete example), SendPrompt sends every key and
+// preserves the declared order. Guards against a refactor that accidentally
+// collapses the ranging loop into "send first key only".
+func TestSendPrompt_MultipleClearKeysAllSentInOrder(t *testing.T) {
+	mgr, mock, _ := newTestManager(t)
+	withShortSendVerify(t, 2*time.Second, time.Millisecond, time.Millisecond)
+	withShortSendClear(t, time.Millisecond)
+	installClearKeys(t, mgr, []string{"C-a", "C-k"})
+
+	const pane = "%clr-multi"
+	const prompt = "hello multi"
+	sess := newIdleSessionWithPane(t, mgr, "/tmp/send-clear-multi", "clr-multi", pane)
+
+	mock.capturedSequence[pane] = []string{
+		"$ ",
+		"$ hello multi\n",
+	}
+
+	if err := mgr.SendPrompt(sess.ID, prompt); err != nil {
+		t.Fatalf("SendPrompt returned err=%v, want nil", err)
+	}
+
+	// Both keys must fire, once each per attempt (one attempt here).
+	if got := mock.countCallsWithArgs("SendKeys", pane, "C-a"); got != 1 {
+		t.Errorf("SendKeys(%q, %q) count = %d, want 1", pane, "C-a", got)
+	}
+	if got := mock.countCallsWithArgs("SendKeys", pane, "C-k"); got != 1 {
+		t.Errorf("SendKeys(%q, %q) count = %d, want 1", pane, "C-k", got)
+	}
+	// Order: C-a before C-k (as declared in the ClearInputKeys slice).
+	caIdx := mock.firstCallIndex("SendKeys", pane, "C-a")
+	ckIdx := mock.firstCallIndex("SendKeys", pane, "C-k")
+	litIdx := mock.firstCallIndex("SendKeysLiteral", pane, prompt)
+	if caIdx < 0 || ckIdx < 0 || litIdx < 0 {
+		t.Fatalf("missing calls: C-a@%d C-k@%d prompt@%d", caIdx, ckIdx, litIdx)
+	}
+	if !(caIdx < ckIdx && ckIdx < litIdx) {
+		t.Errorf("call order violated: C-a@%d < C-k@%d < prompt@%d expected", caIdx, ckIdx, litIdx)
+	}
+}
+
+// TestSendPrompt_ClearKeysNilFallsThrough asserts that when the resolved
+// adapter's ClearInputKeys returns nil (opt-out), SendPrompt keeps its
+// pre-refactor behaviour (no C-u). This is the fall-through contract every
+// existing SendPrompt test also relies on — the baseline fakeAgent's
+// clearKeys defaults to nil — so this test pins it explicitly.
+func TestSendPrompt_ClearKeysNilFallsThrough(t *testing.T) {
+	mgr, mock, _ := newTestManager(t)
+	withShortSendVerify(t, 2*time.Second, time.Millisecond, time.Millisecond)
+	// Deliberately do NOT call installClearKeys.
+
+	const pane = "%noclr"
+	const prompt = "hello world"
+	sess := newIdleSessionWithPane(t, mgr, "/tmp/send-noclr", "noclr", pane)
+
+	mock.capturedSequence[pane] = []string{
+		"$ ",
+		"$ hello world\n",
+	}
+
+	if err := mgr.SendPrompt(sess.ID, prompt); err != nil {
+		t.Fatalf("SendPrompt returned err=%v, want nil", err)
+	}
+	if got := mock.countCallsWithArgs("SendKeys", pane, "C-u"); got != 0 {
+		t.Errorf("SendKeys(%q, %q) count = %d, want 0 (adapter opted out via nil ClearInputKeys)", pane, "C-u", got)
+	}
+	if got := countCalls(mock, "SendKeys", pane); got != 1 {
+		t.Errorf("SendKeys count = %d, want 1 (Enter only)", got)
+	}
+}
+
+// TestSendPrompt_ClearKeysEmptyNoOp asserts that an adapter whose
+// ClearInputKeys returns a non-nil empty slice (`[]string{}`) is treated
+// identically to nil: no C-u, no settle delay. This differentiates from
+// TestSendPrompt_ClearKeysNilFallsThrough (which drives the default nil path)
+// and guards against a regression where `len == 0` on a non-nil slice
+// would still trigger the settle-delay branch or an errant SendKeys.
+func TestSendPrompt_ClearKeysEmptyNoOp(t *testing.T) {
+	mgr, mock, _ := newTestManager(t)
+	withShortSendVerify(t, 2*time.Second, time.Millisecond, time.Millisecond)
+	installClearKeys(t, mgr, []string{}) // non-nil, empty — must still opt out
+
+	const pane = "%noop"
+	const prompt = "hello world"
+	sess := newIdleSessionWithPane(t, mgr, "/tmp/send-noop", "noop", pane)
+
+	mock.capturedSequence[pane] = []string{
+		"$ ",
+		"$ hello world\n",
+	}
+
+	if err := mgr.SendPrompt(sess.ID, prompt); err != nil {
+		t.Fatalf("SendPrompt returned err=%v, want nil", err)
+	}
+	if got := countCalls(mock, "SendKeys", pane); got != 1 {
+		t.Errorf("SendKeys count = %d, want 1 (Enter only — empty clear keys are opt-out)", got)
+	}
+}
+
+// TestSendPrompt_ClearKeyError asserts fail-fast semantics: when the
+// clear-key SendKeys errors, SendPrompt returns immediately without
+// running SendKeysLiteral or the final Enter. The pane is in an unusable
+// state and retrying downstream is meaningless.
+func TestSendPrompt_ClearKeyError(t *testing.T) {
+	mgr, mock, _ := newTestManager(t)
+	withShortSendVerify(t, 2*time.Second, time.Millisecond, time.Millisecond)
+	withShortSendClear(t, time.Millisecond)
+	installClearKeys(t, mgr, []string{"C-u"})
+
+	const pane = "%clr-err"
+	const prompt = "hello"
+	sess := newIdleSessionWithPane(t, mgr, "/tmp/send-clr-err", "clr-err", pane)
+
+	mock.sendKeysErr["C-u"] = errors.New("tmux disconnected")
+
+	err := mgr.SendPrompt(sess.ID, prompt)
+	if err == nil {
+		t.Fatalf("SendPrompt returned nil, want error")
+	}
+	if !strings.Contains(err.Error(), "failed to send clear key") {
+		t.Errorf("error %q missing 'failed to send clear key'", err.Error())
+	}
+	if got := countCalls(mock, "SendKeysLiteral", pane); got != 0 {
+		t.Errorf("SendKeysLiteral called %d times after clear failure, want 0", got)
+	}
+	if got := mock.countCallsWithArgs("SendKeys", pane, "Enter"); got != 0 {
+		t.Errorf("Enter fired %d times after clear failure, want 0", got)
+	}
+	if got := countCalls(mock, "CapturePane", pane); got != 0 {
+		t.Errorf("CapturePane called %d times after clear failure, want 0 (must not reach baseline)", got)
 	}
 }
 

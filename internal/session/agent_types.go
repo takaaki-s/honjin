@@ -172,6 +172,23 @@ type Agent interface {
 	// Description returns the adapter's Layer C description enhancer, or
 	// nil if the adapter cannot produce structured descriptions.
 	Description() DescriptionEnhancer
+	// ClearInputKeys returns the tmux key names (SendKeys form — e.g.
+	// "C-u", "C-a", "BSpace" — not literal text) that clear this adapter's
+	// TUI input line to empty. Manager.SendPrompt sends these before each
+	// send attempt so residual text in the input area cannot concatenate
+	// with the new prompt.
+	//
+	// Return nil (or an empty slice) to opt out: SendPrompt then falls
+	// through to its pre-refactor behaviour and the residual-concat risk
+	// documented in docs/gotchas.md "Session send" applies. Adapters whose
+	// TUI has no safe clear sequence — for example one that rebinds C-u —
+	// should return nil rather than sending keys with side effects.
+	//
+	// This method is on Agent (not a separate PromptClearer interface) so
+	// the compiler catches adapters that forget to implement it: silent
+	// drift would let residual concat regress unnoticed when a new adapter
+	// lands. Opt-out is explicit: return nil.
+	ClearInputKeys() []string
 }
 
 // AgentResolver bridges the Manager to the process-global agent registry

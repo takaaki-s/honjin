@@ -793,6 +793,13 @@ var (
 	// input area, so matching only the tail avoids reflow false negatives
 	// while still uniquely identifying the send.
 	sendVerifyTailBytes = 32
+	// sendClearSettleDelay is how long we wait after sending the adapter's
+	// ClearInputKeys sequence before capturing the baseline. Long enough
+	// for a well-behaved TUI to render the empty input line; short enough
+	// that it contributes negligibly to sendVerifyTimeout even across a
+	// full retry chain. Skipped entirely when the resolved adapter returns
+	// nil / empty keys (opt-out) or the resolver could not produce one.
+	sendClearSettleDelay = 20 * time.Millisecond
 )
 
 // promptTail returns the last n bytes of prompt with whitespace
@@ -850,14 +857,17 @@ func sendVerifyOK(before, after, prompt string) bool {
 // sendVerifyTimeout elapses. Enter is only pressed after verify
 // succeeds, so fully-dropped prompts never get committed.
 //
-// Known limit: verify checks "did the tail appear once more", not
-// "did exactly the prompt land once". A TUI that keeps a dropped
-// prefix from the first attempt can end up with "<prefix><full prompt>"
-// concatenated in its input buffer, and verify still passes. Agent-
-// agnostic guards (kill-line before retry, echo-diff on the exact
-// prompt) all leak per-TUI assumptions into this transport-layer
-// helper, so we accept the risk. Revisit if corruption is ever
-// observed against a real agent.
+// Input-area clear: the adapter's ClearInputKeys sequence is sent before
+// each attempt's baseline capture — so residual text in the input area
+// (previous user typing, or a partial delivery from an earlier attempt)
+// cannot concatenate with the new prompt at Enter time. Adapters that
+// return nil / empty keys skip this step and keep the pre-refactor
+// behaviour; the residual-concat risk then applies to those adapters
+// (documented in docs/gotchas.md "Session send"). A missing AgentResolver
+// or an unknown kind also fall through to "no clear" — SendPrompt is best-
+// effort about the clear and never fails a send because of it, except when
+// the clear-key SendKeys itself errors (fail-fast: the pane is in an
+// unusable state).
 func (m *Manager) SendPrompt(id, prompt string) error {
 	m.mu.RLock()
 	sess, ok := m.sessions[id]
@@ -870,6 +880,7 @@ func (m *Manager) SendPrompt(id, prompt string) error {
 		return fmt.Errorf("session is not idle (current status: %s)", sess.Status)
 	}
 	paneID := sess.TmuxPaneID
+	agentKind := sess.AgentKind
 	m.mu.RUnlock()
 
 	if paneID == "" {
@@ -879,10 +890,31 @@ func (m *Manager) SendPrompt(id, prompt string) error {
 		return fmt.Errorf("tmux client not available")
 	}
 
+	// Resolve the adapter's clear-keys once, up front: it never changes
+	// across the retry loop, and Resolve is a cheap map lookup but doing it
+	// per attempt would still be gratuitous. Any failure at this step falls
+	// through to "no clear" — adapters opt in, and the transport layer must
+	// never refuse a send just because the resolver is misconfigured.
+	clearKeys := m.resolveClearKeys(agentKind)
+
 	deadline := time.Now().Add(sendVerifyTimeout)
 	attempts := 0
 	for {
 		attempts++
+
+		// Clear residual input BEFORE the baseline capture so the "before"
+		// snapshot reflects the post-clear state and sendVerifyOK's
+		// occurrence-count delta stays clean. Fail-fast on a SendKeys error:
+		// if we cannot even push a control key, the pane is unusable and
+		// nothing downstream will succeed either.
+		for _, k := range clearKeys {
+			if err := m.tmuxClient.SendKeys(paneID, k); err != nil {
+				return fmt.Errorf("failed to send clear key %q: %w", k, err)
+			}
+		}
+		if len(clearKeys) > 0 {
+			time.Sleep(sendClearSettleDelay)
+		}
 
 		before, err := m.tmuxClient.CapturePane(paneID, false)
 		if err != nil {
@@ -917,6 +949,22 @@ func (m *Manager) SendPrompt(id, prompt string) error {
 		return fmt.Errorf("failed to send Enter: %w", err)
 	}
 	return nil
+}
+
+// resolveClearKeys returns the adapter's ClearInputKeys sequence for the
+// given kind, or nil when the resolver is not installed, the kind is
+// unknown, or the adapter opts out (returns nil / empty). Errors are logged
+// and swallowed — see the fall-through contract in SendPrompt's doc.
+func (m *Manager) resolveClearKeys(kind string) []string {
+	if m.agentResolver == nil {
+		return nil
+	}
+	ag, err := m.agentResolver.Resolve(kind)
+	if err != nil {
+		debugLog("[SEND] resolveClearKeys: agent %q unknown: %v", kind, err)
+		return nil
+	}
+	return ag.ClearInputKeys()
 }
 
 // paneTargetLocked resolves a session's tmux target: the recorded pane ID when

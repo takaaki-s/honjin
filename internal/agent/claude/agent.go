@@ -80,3 +80,11 @@ func (a *Agent) Setup(ctx agent.SetupContext) error {
 // HooksSettingsPath returns the cached path written by Setup; empty means
 // Setup either hasn't run yet or the write failed.
 func (a *Agent) HooksSettingsPath() string { return a.hooksPath }
+
+// ClearInputKeys returns the tmux key sequence Manager.SendPrompt sends
+// before each attempt to wipe Claude Code's input line to empty, preventing
+// residual text from concatenating with the new prompt. C-u is the standard
+// readline kill-line binding and Claude Code's TUI honours it. Adapters may
+// return nil to opt out; empty here would mean "opt out" and disable the
+// residual-concat protection for claude sessions.
+func (a *Agent) ClearInputKeys() []string { return []string{"C-u"} }
