@@ -80,6 +80,20 @@ func ResolveWorktreeDir(currentWorkDir, workDir string) string {
 	return workDir
 }
 
+// IsDirty reports whether the working tree at workDir has uncommitted
+// changes (staged, unstaged, or untracked). The caller uses this as a
+// lightweight pre-check before starting async work that would refuse a dirty
+// worktree, so the failure can be reported synchronously instead of via a
+// state transition. Errors from git are propagated verbatim — the caller
+// treats them as "cannot tell" and typically aborts.
+func (c *Client) IsDirty(workDir string) (bool, error) {
+	output, err := c.r.Run(workDir, "status", "--porcelain")
+	if err != nil {
+		return false, fmt.Errorf("git status --porcelain: %s: %w", strings.TrimSpace(string(output)), err)
+	}
+	return len(strings.TrimSpace(string(output))) > 0, nil
+}
+
 // RemoveWorktree removes a git worktree at workDir.
 // Returns ErrDirty if the worktree has uncommitted changes and force is
 // false. Returns ErrNotWorktree if workDir is not a git worktree. A
