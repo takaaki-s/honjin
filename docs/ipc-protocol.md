@@ -19,33 +19,32 @@ per-action:
 | response wait (default) | 60s | every action without its own entry below |
 | response wait: `hook` | 10s | the agent-facing path — a stalled hook blocks the agent process itself |
 | response wait: `stop` | 5s | the remedy for a wedged daemon, so it must not inherit the wedged-daemon bound |
-| response wait: `new` | none | the handler chains unbounded git subprocesses and then the post-create hook; only the hook is capped (`worktree.hook_timeout`, default 300s) |
-| response wait: `delete` | none | the handler runs `git worktree remove` synchronously, and neither side bounds it — how long an `rm -rf` of a checkout takes is a property of the user's disk |
 | response wait: `pane-popup` | none | the handler runs `tmux display-popup -E`, which blocks for the popup's user-controlled lifetime |
 
 **The client bounds an exchange only when it can name a duration that is
-certainly longer than any legitimate handler run.** `new`, `delete` and
-`pane-popup` have no such value — one is capped by a user-editable config key
-the client cannot see, one by an external process over a checkout of unknown
-size, the last by when the user closes a popup — so they defer to the bound the
-handler already owns. Guessing on their behalf would not protect anyone: since
-a timeout is not a cancellation (below), a bound that fires early just reports
-an unknown outcome for work that goes on to succeed.
+certainly longer than any legitimate handler run.** `pane-popup` has no such
+value — its handler blocks for however long the user leaves the popup open —
+so it defers to the bound the handler already owns. Guessing on its behalf
+would not protect anyone: since a timeout is not a cancellation (below), a
+bound that fires early just reports an unknown outcome for work that goes on
+to succeed.
 
-Dial and write stay bounded for every action, including those three. The write
+Dial and write stay bounded for every action, `pane-popup` included. The write
 bound is a single constant rather than a per-action one because what it guards
 does not vary: a request is one small JSON value, and the daemon decodes each
 accepted connection on its own goroutine, so writing never waits on handler
 work. A blocked write means the daemon stopped reading, and it is reported that
 way rather than as a failure to respond.
 
-The 60s response wait is deliberately generous. With `new`, `delete` and
-`pane-popup` out of its scope — and `hook` and `stop` on bounds of their own —
-what it covers is tmux subprocess calls and local file reads, plus one handler
-with a named cost: `send` waits up to 5s for the prompt to appear in the pane
-before giving up. Those handlers queue behind the manager lock, so
-60s is sized to clear a backlog of them; hitting it should mean "the daemon is
-wedged", not "this machine is loaded".
+The 60s response wait is deliberately generous. With `pane-popup` out of its
+scope — and `hook` and `stop` on bounds of their own — what it covers is tmux
+subprocess calls and local file reads, plus one handler with a named cost:
+`send` waits up to 5s for the prompt to appear in the pane before giving up.
+Those handlers queue behind the manager lock, so 60s is sized to clear a
+backlog of them; hitting it should mean "the daemon is wedged", not "this
+machine is loaded". `new` and `delete` also live under this default: see
+[Async completion](#async-completion) for why their handlers no longer need
+an exception.
 
 The table lists the bounds a Go client sets today, so `agent-signal` has no row:
 the daemon dispatches it, but no client method sends it. It nonetheless lands on
@@ -54,8 +53,8 @@ the `hook` bound rather than the default — `hookRequestTimeout` in `client.go`
 traces the path and says so.
 
 **A timeout is not a cancellation.** The protocol has no cancel channel, so a
-client that gives up does not stop the daemon — a mutating action such as
-`new` or `delete` may still complete. Error messages for those actions
+client that gives up does not stop the daemon — a mutating action may still
+complete. Error messages for those actions
 therefore report an unknown outcome rather than a failure, and point at
 `jin daemon restart` instead of encouraging a blind retry; read-only actions
 (`readOnlyActions` in `server.go`) get a plain timeout message instead, so the
@@ -106,13 +105,13 @@ it alone.
 
 | Action | Data Type | Description |
 |--------|-----------|-------------|
-| `new` | `NewRequest` | Create session |
+| `new` | `NewRequest` | Create session (async; poll via `get`) |
 | `list` | (none) | List all sessions |
 | `get` | `IDRequest` | Get a single session (with last-message enrichment) |
 | `send` | `SendRequest` | Send a prompt to a session (alias `prompt` on the CLI) |
 | `start` | `IDRequest` | Start session |
 | `kill` | `IDRequest` | Kill session |
-| `delete` | `DeleteRequest` | Delete session (optionally with worktree) |
+| `delete` | `DeleteRequest` | Delete session (async; poll via `get`, optionally with worktree) |
 | `stop` | (none) | Stop daemon |
 | `hook` | `HookRequest` | Claude Code hook event |
 | `result` | `ResultRequest` | Fetch structured transcript entries (orchestration) |
@@ -124,6 +123,31 @@ it alone.
 | `pane-capture` | `PaneCaptureRequest` | Capture the visible contents of a session's pane |
 | `pane-send-keys` | `PaneSendKeysRequest` | Send keys to a session's pane (literal text or tmux key names) |
 | `plugin-run` | `PluginRunRequest` | Run a plugin on demand for a session (bypasses matcher/debounce; async) |
+
+## Async completion
+
+`new`, `delete` and `plugin-run` accept the request, return an acknowledgement,
+and continue their real work in a goroutine. The daemon uses this pattern
+whenever the underlying I/O has no bound the client can name (git subprocesses,
+`rm -rf` over an unknown-size checkout, plugin scripts) so the response wait
+stays covered by the default 60s tier.
+
+- `new` returns immediately with a session `Info` at `Status=creating`. The
+  client polls `get` and observes the transition to `running` / `idle` on
+  success or `stopped` + `error_message` on failure. Non-fatal warnings
+  (e.g. post-create hook detected but not allowed) surface through
+  `Info.creation_warning`, which persists until the session is deleted.
+- `delete` flips the session to `Status=deleting`, then removes the worktree
+  and drops the record. The client sees the record disappear on success or
+  `Status=stopped` + `error_message` on failure.
+- `plugin-run` writes its outcome to the plugin log; the response only
+  confirms the run was dispatched.
+
+The **synchronous pre-checks** for these actions still fail on the response:
+`new` refuses an unknown agent kind; `delete` refuses a missing session, a
+non-worktree target when `remove_worktree` was requested, and a dirty
+worktree when `remove_worktree` was requested without `force_remove_worktree`.
+Everything past those checks runs in the goroutine.
 
 ## Request Types
 

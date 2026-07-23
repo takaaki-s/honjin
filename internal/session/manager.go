@@ -72,6 +72,17 @@ func (m *Manager) SetHookRunner(r worktreehook.Runner) {
 	m.hookRunner = r
 }
 
+// SetGitClient replaces the git client. Intended for tests that need to
+// substitute a scripted Runner so the manager's git subprocess calls
+// (worktree prune/add/remove, branch operations, dirty probes) become
+// observable and deterministic. Production code never calls this; NewManager
+// wires the real client via git.NewClient().
+func (m *Manager) SetGitClient(c *git.Client) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.gitClient = c
+}
+
 // SetPluginDispatcher installs the plugin event dispatcher. A nil dispatcher
 // disables plugin event publishing.
 func (m *Manager) SetPluginDispatcher(d plugin.Dispatcher) {
@@ -238,6 +249,19 @@ func resumeStatusSource(live, fromDisk Status) Status {
 	return live
 }
 
+// interruptedAsyncMessage returns the ErrorMessage to stamp on a session
+// whose pre-restart Status implies an async operation was in flight when the
+// daemon went down. Empty for statuses that do not carry such an implication.
+func interruptedAsyncMessage(persisted Status) string {
+	switch persisted {
+	case StatusCreating:
+		return "provisioning was interrupted by daemon restart"
+	case StatusDeleting:
+		return "deletion was interrupted by daemon restart; retry with `jin session delete`"
+	}
+	return ""
+}
+
 // applyRecovery re-takes the lock and applies each decision, re-validating it
 // against live state first. It returns copies to persist and the live
 // sessions to start monitoring, both handled by the caller outside the lock.
@@ -271,17 +295,47 @@ func (m *Manager) applyRecovery(decisions []recoverDecision) (saves []Session, m
 				live.Status = StatusStopped
 				saves = append(saves, *live)
 				debugLog("[RECOVER] Session %s has active status but no tmux session, marked stopped", live.Description)
+			} else if msg := interruptedAsyncMessage(d.fromDisk); msg != "" {
+				// Persisted Status was Creating or Deleting and there is no
+				// live tmux — an async op was interrupted by the daemon
+				// restart. Re-save with an ErrorMessage so the user sees why
+				// the session is stuck; the "already-stopped" guard above
+				// would otherwise skip the write and lose that signal.
+				live.Status = StatusStopped
+				live.ErrorMessage = msg
+				saves = append(saves, *live)
+				debugLog("[RECOVER] Session %s: interrupted async op (%s), marked stopped with error", live.Description, d.fromDisk)
 			}
 		case recoverWindowGone:
 			live.TmuxWindowName = ""
 			live.Status = StatusStopped
+			if msg := interruptedAsyncMessage(d.fromDisk); msg != "" {
+				live.ErrorMessage = msg
+			}
 			saves = append(saves, *live)
 			debugLog("[RECOVER] Session %s inner tmux session gone, marked stopped", live.Description)
 		case recoverPaneDead:
 			live.Status = StatusStopped
+			if msg := interruptedAsyncMessage(d.fromDisk); msg != "" {
+				live.ErrorMessage = msg
+			}
 			saves = append(saves, *live)
 			debugLog("[RECOVER] Session %s tmux pane dead, kept TmuxWindowName (session preserved)", live.Description)
 		case recoverResume:
+			// A persisted StatusDeleting means the user was already
+			// deleting this session when the daemon went down. The
+			// delete intent wins over the pane being alive — resuming
+			// a session the user asked to remove would silently reverse
+			// their action. Mark stopped with the interruption message
+			// so a retry via `jin session delete` is obvious; monitoring
+			// is intentionally skipped.
+			if d.fromDisk == StatusDeleting {
+				live.Status = StatusStopped
+				live.ErrorMessage = interruptedAsyncMessage(StatusDeleting)
+				saves = append(saves, *live)
+				debugLog("[RECOVER] Session %s: delete interrupted with live pane, marked stopped (retry via `jin session delete`)", live.Description)
+				continue
+			}
 			if d.verdictOK {
 				// The adapter's verdict wins; only Status is applied — see
 				// the "recover" contract on StatusSignal. It was derived at
@@ -472,191 +526,210 @@ type CreateOptions struct {
 	WorktreeBase   string // Override auto-detected base branch (default: origin/HEAD)
 }
 
-// CreateWithOptions creates a new session with full options.
+// worktreeProvisioning carries the outputs of provisionWorktree back to its
+// caller. undo undoes the on-disk changes (git worktree + branch) and is safe
+// to call zero or one times. warning may be non-empty even when err is nil.
+type worktreeProvisioning struct {
+	worktreePath string
+	branch       string
+	warning      string
+	undo         func()
+}
+
+// provisionWorktree runs the git subprocess chain and post-create hook that a
+// worktree-backed session needs before it is usable. All I/O runs outside
+// m.mu — this function never takes the manager lock. undo is a self-contained
+// closure that removes the worktree checkout and deletes the branch; the
+// caller must invoke it on any subsequent failure that leaves the session
+// unusable.
 //
-// The second return value is a non-fatal warning message (e.g. hook skipped
-// because the repository is not allowlisted). Empty when there is nothing to
-// surface. It is intentionally NOT stored on Session, so subsequent Get/List
-// responses do not carry a stale warning.
+// sessionID is used as the seed for the auto-derived worktree name. opts is
+// interpreted as if the caller had asked CreateWithOptions with the same
+// options; only the worktree path is populated (Worktree=true required).
+func (m *Manager) provisionWorktree(sessionID string, opts CreateOptions) (worktreeProvisioning, error) {
+	var out worktreeProvisioning
+	if !opts.Worktree {
+		return out, fmt.Errorf("provisionWorktree called with Worktree=false")
+	}
+	if !git.IsGitRoot(opts.WorkDir) {
+		return out, fmt.Errorf("not a git repository: %s", opts.WorkDir)
+	}
+
+	cfg := m.configMgr.GetWorktreeConfig()
+
+	base := opts.WorktreeBase
+	if base == "" {
+		detected, err := m.gitClient.DetectDefaultBranch(opts.WorkDir)
+		if err != nil {
+			base = cfg.DefaultBranch
+			if base == "" {
+				return out, fmt.Errorf("cannot detect default branch: %w", err)
+			}
+		} else {
+			base = detected
+		}
+	}
+
+	originalRepoDir := opts.WorkDir
+	repoBasename := filepath.Base(originalRepoDir)
+	baseName := deriveWorktreeName(sessionID, opts.WorktreeName)
+
+	// Clear orphan worktree registrations (`.git/worktrees/<name>/` metadata
+	// left after a manual `rm -rf` of the worktree directory) so the
+	// collision check below reflects the true git state. Best-effort:
+	// prune failures shouldn't block session creation.
+	if err := m.gitClient.PruneWorktrees(originalRepoDir); err != nil {
+		debugLog("[WORKTREE] prune failed for %s: %v", originalRepoDir, err)
+	}
+
+	var (
+		finalName string
+		branch    string
+	)
+	if opts.WorktreeName != "" {
+		// Explicit override: honour the user's choice verbatim. Pre-check
+		// the branch so we fail fast with a clear message instead of
+		// leaking git's raw "fatal: branch 'X' already exists" through
+		// AddWorktree.
+		finalName = opts.WorktreeName
+		branch = deriveBranchName(finalName, cfg.BranchPrefix, opts.WorktreeBranch)
+		if m.gitClient.BranchExists(originalRepoDir, branch) {
+			return out, fmt.Errorf("branch %q already exists", branch)
+		}
+	} else {
+		collides := func(candidate string) bool {
+			candidatePath, err := expandBaseDir(cfg.BaseDir, candidate, repoBasename)
+			if err != nil {
+				return true
+			}
+			if _, err := os.Stat(candidatePath); err == nil {
+				return true
+			}
+			candidateBranch := deriveBranchName(candidate, cfg.BranchPrefix, opts.WorktreeBranch)
+			return m.gitClient.BranchExists(originalRepoDir, candidateBranch)
+		}
+		name, err := findAvailableWorktreeName(baseName, collides)
+		if err != nil {
+			return out, err
+		}
+		finalName = name
+		branch = deriveBranchName(finalName, cfg.BranchPrefix, opts.WorktreeBranch)
+	}
+
+	worktreePath, err := expandBaseDir(cfg.BaseDir, finalName, repoBasename)
+	if err != nil {
+		return out, err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
+		return out, fmt.Errorf("creating worktree parent dir: %w", err)
+	}
+
+	if err := m.gitClient.AddWorktree(originalRepoDir, branch, worktreePath, "origin/"+base); err != nil {
+		return out, fmt.Errorf("git worktree add: %w", err)
+	}
+
+	// Build undo before anything that might fail after AddWorktree — every
+	// subsequent error path returns undo so the caller can invoke it.
+	undo := func() {
+		if err := m.gitClient.RemoveWorktree(worktreePath, true); err != nil {
+			debugLog("[WORKTREE] rollback: RemoveWorktree failed for %s: %v", worktreePath, err)
+		}
+		if err := m.gitClient.DeleteBranch(originalRepoDir, branch); err != nil {
+			debugLog("[WORKTREE] rollback: DeleteBranch failed for %s: %v", branch, err)
+		}
+	}
+
+	var hookWarning string
+
+	// Post-create hook: runs synchronously so a non-zero exit tears the
+	// worktree/branch back down through undo. Skipped silently when the
+	// caller opts out, the runner is not wired up, or config disables the
+	// feature.
+	if !opts.NoHook && m.hookRunner != nil &&
+		(cfg.HookEnabled == nil || *cfg.HookEnabled) {
+
+		scriptPath, exists := m.hookRunner.Discover(originalRepoDir)
+		if exists {
+			verdict, verifyErr := m.hookRunner.Verify(scriptPath, originalRepoDir)
+			if verifyErr != nil {
+				// Verify may return a verdict alongside err (e.g. hash
+				// failure); treat err as authoritative and abort before
+				// switching on verdict to avoid running an unverified hook.
+				undo()
+				return out, fmt.Errorf("verify worktree hook: %w", verifyErr)
+			}
+			switch verdict {
+			case worktreehook.VerdictOK:
+				timeout := time.Duration(cfg.HookTimeout) * time.Second
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				logPath := m.hookRunner.HookLogPath(m.stateDir, sessionID)
+				runErr := m.hookRunner.Run(ctx, worktreehook.RunOptions{
+					ScriptPath:   scriptPath,
+					WorktreePath: worktreePath,
+					RepoRoot:     originalRepoDir,
+					Branch:       branch,
+					Base:         base,
+					SessionID:    sessionID,
+					SessionName:  opts.Description,
+					LogPath:      logPath,
+					Timeout:      timeout,
+				})
+				cancel()
+				if runErr != nil {
+					undo()
+					return out, fmt.Errorf("worktree post-create hook failed: %w (log: %s)", runErr, logPath)
+				}
+			case worktreehook.VerdictNotAllowed:
+				hookWarning = fmt.Sprintf("Post-create hook detected but not allowed: %s. Run `jin worktree allow` to trust this repository.", scriptPath)
+				debugLog("[WORKTREE] hook not allowed for %s (run: jin worktree allow)", originalRepoDir)
+			case worktreehook.VerdictChanged:
+				hookWarning = "Post-create hook script changed since last allow. Run `jin worktree allow` to re-trust."
+				debugLog("[WORKTREE] hook script changed for %s (run: jin worktree allow)", originalRepoDir)
+			}
+		}
+	}
+
+	out.worktreePath = worktreePath
+	out.branch = branch
+	out.warning = hookWarning
+	out.undo = undo
+	return out, nil
+}
+
+// ReserveCreation validates a create request, mints a session ID, and
+// registers a StatusCreating record so the client has an ID to poll
+// immediately. It does no external I/O — no git, no hook, no tmux. Callers
+// that want the whole worktree provisioning done inline (existing sync
+// tests, `CreateWithOptions`) do not use this directly.
 //
-// Uses named returns so a deferred rollback (in the worktree path) can detect
-// whether a later step failed and clean up the created worktree/branch.
+// Returns both the live session pointer (used by the daemon's async
+// goroutine to pass through to ProvisionAsync — only sess.ID is read after
+// the caller releases m.mu, and sess.ID is immutable) and a value-copy Info
+// snapshot taken under the same critical section. Handlers must marshal the
+// response from that Info, not from sess.ToInfo(): once the goroutine kicks
+// off, ProvisionAsync can mutate the record and a later ToInfo() would race.
 //
-// Lock discipline (worktree path): git operations run outside m.mu; the
-// sessions map is re-checked under lock after worktree creation. Holding
-// m.mu across git subprocesses would block reads (List, Get, SetStatus)
-// on the whole daemon for the duration of the worktree add.
-func (m *Manager) CreateWithOptions(opts CreateOptions) (result *Session, warning string, retErr error) {
+// For the worktree case, opts.WorkDir is treated as the repo root and the
+// resulting session's WorkDir is set to that path as a placeholder;
+// ProvisionAsync overwrites WorkDir with the final worktree path once
+// provisioning completes. The workDir conflict check is skipped in that
+// case because the placeholder is intentionally shared by concurrent
+// worktree sessions in the same repo — the final paths are guaranteed
+// unique by findAvailableWorktreeName.
+func (m *Manager) ReserveCreation(opts CreateOptions) (*Session, Info, error) {
 	if opts.Fleet == "" {
 		opts.Fleet = DefaultFleet
 	}
-
-	// WorkDir is required
 	if opts.WorkDir == "" {
-		return nil, "", fmt.Errorf("work directory is required")
+		return nil, Info{}, fmt.Errorf("work directory is required")
 	}
 
-	// Pre-generate the session ID so the auto-derived worktree name can key
-	// off it. Also becomes Session.ID below so we only ever mint one UUID.
 	sessionID := uuid.New().String()
 
-	var (
-		worktreeCreated bool
-		worktreePath    string
-		branch          string
-		originalRepoDir string
-		hookWarning     string
-	)
-
-	if opts.Worktree {
-		if !git.IsGitRoot(opts.WorkDir) {
-			return nil, "", fmt.Errorf("not a git repository: %s", opts.WorkDir)
-		}
-
-		cfg := m.configMgr.GetWorktreeConfig()
-
-		base := opts.WorktreeBase
-		if base == "" {
-			detected, err := m.gitClient.DetectDefaultBranch(opts.WorkDir)
-			if err != nil {
-				base = cfg.DefaultBranch
-				if base == "" {
-					return nil, "", fmt.Errorf("cannot detect default branch: %w", err)
-				}
-			} else {
-				base = detected
-			}
-		}
-
-		originalRepoDir = opts.WorkDir
-		repoBasename := filepath.Base(originalRepoDir)
-		baseName := deriveWorktreeName(sessionID, opts.WorktreeName)
-
-		// Clear orphan worktree registrations (`.git/worktrees/<name>/` metadata
-		// left after a manual `rm -rf` of the worktree directory) so the
-		// collision check below reflects the true git state. Best-effort:
-		// prune failures shouldn't block session creation.
-		if err := m.gitClient.PruneWorktrees(originalRepoDir); err != nil {
-			debugLog("[WORKTREE] prune failed for %s: %v", originalRepoDir, err)
-		}
-
-		var finalName string
-		if opts.WorktreeName != "" {
-			// Explicit override: honour the user's choice verbatim. Pre-check
-			// the branch so we fail fast with a clear message instead of
-			// leaking git's raw "fatal: branch 'X' already exists" through
-			// AddWorktree.
-			finalName = opts.WorktreeName
-			branch = deriveBranchName(finalName, cfg.BranchPrefix, opts.WorktreeBranch)
-			if m.gitClient.BranchExists(originalRepoDir, branch) {
-				return nil, "", fmt.Errorf("branch %q already exists", branch)
-			}
-		} else {
-			collides := func(candidate string) bool {
-				candidatePath, err := expandBaseDir(cfg.BaseDir, candidate, repoBasename)
-				if err != nil {
-					return true
-				}
-				if _, err := os.Stat(candidatePath); err == nil {
-					return true
-				}
-				candidateBranch := deriveBranchName(candidate, cfg.BranchPrefix, opts.WorktreeBranch)
-				return m.gitClient.BranchExists(originalRepoDir, candidateBranch)
-			}
-			name, err := findAvailableWorktreeName(baseName, collides)
-			if err != nil {
-				return nil, "", err
-			}
-			finalName = name
-			branch = deriveBranchName(finalName, cfg.BranchPrefix, opts.WorktreeBranch)
-		}
-
-		var err error
-		worktreePath, err = expandBaseDir(cfg.BaseDir, finalName, repoBasename)
-		if err != nil {
-			return nil, "", err
-		}
-
-		if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
-			return nil, "", fmt.Errorf("creating worktree parent dir: %w", err)
-		}
-
-		if err := m.gitClient.AddWorktree(originalRepoDir, branch, worktreePath, "origin/"+base); err != nil {
-			return nil, "", fmt.Errorf("git worktree add: %w", err)
-		}
-
-		worktreeCreated = true
-		defer func() {
-			if retErr != nil && worktreeCreated {
-				if err := m.gitClient.RemoveWorktree(worktreePath, true); err != nil {
-					debugLog("[WORKTREE] rollback: RemoveWorktree failed for %s: %v", worktreePath, err)
-				}
-				if err := m.gitClient.DeleteBranch(originalRepoDir, branch); err != nil {
-					debugLog("[WORKTREE] rollback: DeleteBranch failed for %s: %v", branch, err)
-				}
-			}
-		}()
-
-		// Post-create hook: runs synchronously inside the rollback window so a
-		// non-zero exit tears the worktree/branch back down. Skipped silently
-		// when the caller opts out, the runner is not wired up, or config
-		// disables the feature.
-		if !opts.NoHook && m.hookRunner != nil &&
-			(cfg.HookEnabled == nil || *cfg.HookEnabled) {
-
-			scriptPath, exists := m.hookRunner.Discover(originalRepoDir)
-			if exists {
-				verdict, verifyErr := m.hookRunner.Verify(scriptPath, originalRepoDir)
-				if verifyErr != nil {
-					// Verify may return a verdict alongside err (e.g. hash
-					// failure); treat err as authoritative and abort before
-					// switching on verdict to avoid running an unverified hook.
-					return nil, "", fmt.Errorf("verify worktree hook: %w", verifyErr)
-				}
-				switch verdict {
-				case worktreehook.VerdictOK:
-					timeout := time.Duration(cfg.HookTimeout) * time.Second
-					ctx, cancel := context.WithTimeout(context.Background(), timeout)
-					logPath := m.hookRunner.HookLogPath(m.stateDir, sessionID)
-					runErr := m.hookRunner.Run(ctx, worktreehook.RunOptions{
-						ScriptPath:   scriptPath,
-						WorktreePath: worktreePath,
-						RepoRoot:     originalRepoDir,
-						Branch:       branch,
-						Base:         base,
-						SessionID:    sessionID,
-						SessionName:  opts.Description,
-						LogPath:      logPath,
-						Timeout:      timeout,
-					})
-					cancel()
-					if runErr != nil {
-						return nil, "", fmt.Errorf("worktree post-create hook failed: %w (log: %s)", runErr, logPath)
-					}
-				case worktreehook.VerdictNotAllowed:
-					hookWarning = fmt.Sprintf("Post-create hook detected but not allowed: %s. Run `jin worktree allow` to trust this repository.", scriptPath)
-					debugLog("[WORKTREE] hook not allowed for %s (run: jin worktree allow)", originalRepoDir)
-				case worktreehook.VerdictChanged:
-					hookWarning = "Post-create hook script changed since last allow. Run `jin worktree allow` to re-trust."
-					debugLog("[WORKTREE] hook script changed for %s (run: jin worktree allow)", originalRepoDir)
-				}
-			}
-		}
-
-		opts.WorkDir = worktreePath
-	}
-
-	// Build the session before taking the lock: the baseline description and
-	// IsGitWorktreeDir below both stat the filesystem, and they only depend on
-	// opts.WorkDir, which is final at this point.
-	id := sessionID
-
-	// Layer A: derive a repo-based baseline label when the caller did not
-	// supply a manual description. opts.WorkDir here is the *final* path (a
-	// worktree path in the worktree branch, otherwise the caller's request),
-	// which is the invariant GenerateBaselineDescription documents. The
-	// original repo name is intentionally *not* threaded into worktree
-	// sessions at this layer — Layer C is expected to enrich those later.
+	// Layer A description. For the worktree case, opts.WorkDir is still the
+	// repo root; ProvisionAsync recomputes the baseline against the final
+	// worktree path if the caller did not lock the description.
 	description := strings.TrimSpace(opts.Description)
 	locked := true
 	if description == "" {
@@ -664,64 +737,211 @@ func (m *Manager) CreateWithOptions(opts CreateOptions) (result *Session, warnin
 		locked = false
 	}
 
-	// Mint the adapter-side session ID up front. Every adapter jind-ai knows
-	// about needs some kind of persistent handle (Claude Code's --session-id,
-	// Codex's conversation id, ...) and a fresh UUID is a safe universal
-	// default. Adapters that don't need one can ignore the value.
-	agentSessionID := uuid.New().String()
-
 	agentKind := opts.AgentKind
 	if agentKind == "" {
 		agentKind = "claude"
 	}
 
 	session := &Session{
-		ID:                id,
+		ID:                sessionID,
 		Description:       description,
 		DescriptionLocked: locked,
 		WorkDir:           opts.WorkDir,
 		CreatedAt:         time.Now(),
-		Status:            StatusStopped,
+		Status:            StatusCreating,
 		AgentKind:         agentKind,
-		AgentSessionID:    agentSessionID,
+		AgentSessionID:    uuid.New().String(),
 		Fleet:             opts.Fleet,
 		// Set IsWorktree immediately so the TUI delete modal offers the
 		// worktree removal option without waiting for the 10s
-		// captureOutputTmux poll cycle. `opts.Worktree` reflects "did we
-		// just create a worktree"; also check the WorkDir for cases where
-		// the user pointed at an existing worktree directly.
+		// captureOutputTmux poll cycle. `opts.Worktree` reflects "we will
+		// create a worktree"; also check the WorkDir for cases where the
+		// user pointed at an existing worktree directly.
 		IsWorktree: opts.Worktree || git.IsGitWorktreeDir(opts.WorkDir),
 	}
 
 	m.mu.Lock()
 
-	// Duplicate-directory check. It must share one critical section with the
-	// map insert below, or two concurrent creates for the same WorkDir could
-	// both pass.
-	if s := m.workDirConflictLocked(opts.WorkDir, ""); s != nil {
-		m.mu.Unlock()
-		return nil, "", fmt.Errorf("session already exists for directory: %s (session: %s)", opts.WorkDir, s.Description)
+	// Skip the workDir conflict check for the worktree case: opts.WorkDir is
+	// the repo root and multiple concurrent worktree creates legitimately
+	// share it as a placeholder. The final worktree path (set by
+	// ProvisionAsync) is guaranteed unique via findAvailableWorktreeName.
+	if !opts.Worktree {
+		if s := m.workDirConflictLocked(opts.WorkDir, ""); s != nil {
+			m.mu.Unlock()
+			return nil, Info{}, fmt.Errorf("session already exists for directory: %s (session: %s)", opts.WorkDir, s.Description)
+		}
 	}
 
-	// Copy for the unlocked Save below, taken while we still hold the only
-	// reference (see TryUpgradeDescription for why Save gets a copy).
+	m.sessions[sessionID] = session
+	// Snapshot both the persistable copy (for Save) and the client-facing
+	// Info (for the daemon response) under the lock. Callers must marshal
+	// their response from this info — a later sess.ToInfo() races with the
+	// provisioning goroutine's writes to the same record.
 	saved := *session
-	m.sessions[id] = session
+	info := session.ToInfo()
 	m.mu.Unlock()
 
-	// Save outside the lock. On failure, deregister so the caller-visible
-	// invariant "a returned session is registered and persisted" still holds;
-	// the non-nil retErr also triggers the worktree rollback defer above. The
-	// brief window where List/Get can see the unpersisted session is accepted
-	// — Save only fails when the disk is broken.
 	if err := m.store.Save(saved); err != nil {
 		m.mu.Lock()
-		delete(m.sessions, id)
+		delete(m.sessions, sessionID)
 		m.mu.Unlock()
-		return nil, "", err
+		return nil, Info{}, err
 	}
 
-	return session, hookWarning, nil
+	return session, info, nil
+}
+
+// ProvisionAsync runs the external provisioning work (git worktree add,
+// post-create hook) for a session previously registered by ReserveCreation.
+// On error, on-disk state is fully undone and the record is left untouched;
+// the caller decides how to surface the failure (typically via
+// MarkCreationFailed for the async handler path, or by dropping the record
+// for the sync-compat path).
+//
+// On success the session record's WorkDir is updated to the final worktree
+// path (worktree case), the baseline description is recomputed against that
+// path when unlocked, and the update is persisted. Status is left at
+// StatusCreating so callers can decide whether to move it forward
+// (StartBackground) or transition to StatusStopped ("ready to start").
+func (m *Manager) ProvisionAsync(sess *Session, opts CreateOptions) (string, error) {
+	if !opts.Worktree {
+		// Nothing to provision — non-worktree sessions are usable as soon as
+		// ReserveCreation returns.
+		return "", nil
+	}
+	prov, err := m.provisionWorktree(sess.ID, opts)
+	if err != nil {
+		return "", err
+	}
+
+	m.mu.Lock()
+	live, ok := m.sessions[sess.ID]
+	if !ok {
+		// Session was deleted while provisioning was in flight; undo the
+		// on-disk changes so we do not leak a worktree and branch.
+		m.mu.Unlock()
+		prov.undo()
+		return "", fmt.Errorf("session %s no longer registered (deleted during provisioning)", sess.ID)
+	}
+	// Final WorkDir conflict check against the resolved worktree path. In
+	// practice findAvailableWorktreeName makes collisions extremely rare
+	// (session-id-derived names + -N suffixes), but the invariant "no two
+	// sessions manage the same directory" is preserved: the old sync path
+	// ran this check under the same critical section as the map insert, and
+	// tests pin the behaviour.
+	if s := m.workDirConflictLocked(prov.worktreePath, sess.ID); s != nil {
+		m.mu.Unlock()
+		prov.undo()
+		return "", fmt.Errorf("session already exists for directory: %s (session: %s)", prov.worktreePath, s.Description)
+	}
+	live.WorkDir = prov.worktreePath
+	if !live.DescriptionLocked {
+		live.Description = GenerateBaselineDescription(prov.worktreePath, "", false, "")
+	}
+	saved := *live
+	m.mu.Unlock()
+
+	if err := m.store.Save(saved); err != nil {
+		prov.undo()
+		return "", fmt.Errorf("saving session after provisioning: %w", err)
+	}
+	return prov.warning, nil
+}
+
+// MarkCreationFailed persists a failure verdict on a reserved session's
+// async creation: Status flips to Stopped and ErrorMessage carries err. The
+// record is kept so clients that poll `get` after the daemon accepted the
+// request can still see what happened. Idempotent — safe on already-deleted
+// or already-marked sessions.
+//
+// The store.Save is fire-and-forget: the calling goroutine has no one to
+// report to, but a failed persist matters diagnostically (memory stays
+// authoritative and the next Save reconverges), so log rather than drop.
+func (m *Manager) MarkCreationFailed(id string, err error) {
+	m.mu.Lock()
+	session, ok := m.sessions[id]
+	if !ok {
+		m.mu.Unlock()
+		return
+	}
+	session.Status = StatusStopped
+	if err != nil {
+		session.ErrorMessage = err.Error()
+	}
+	saved := *session
+	m.mu.Unlock()
+	if saveErr := m.store.Save(saved); saveErr != nil {
+		debugLog("[SESSION] MarkCreationFailed %s: persist failed: %v", id, saveErr)
+	}
+}
+
+// SetCreationWarning records a non-fatal warning produced during async
+// creation (e.g. post-create hook detected but not allowed). The warning
+// lives on the session record until the session itself is deleted so
+// subsequent `get` responses can surface it. Idempotent — a repeat call
+// simply overwrites the previous value.
+//
+// The store.Save is fire-and-forget (same reasoning as MarkCreationFailed):
+// log on failure so an unreachable filesystem is diagnosable.
+func (m *Manager) SetCreationWarning(id string, warning string) {
+	m.mu.Lock()
+	session, ok := m.sessions[id]
+	if !ok {
+		m.mu.Unlock()
+		return
+	}
+	session.CreationWarning = warning
+	saved := *session
+	m.mu.Unlock()
+	if err := m.store.Save(saved); err != nil {
+		debugLog("[SESSION] SetCreationWarning %s: persist failed: %v", id, err)
+	}
+}
+
+// dropSession removes a session record from the in-memory map and the store,
+// unconditionally. Intended for the sync-compat path in CreateWithOptions
+// where provisioning failure must leave no persisted record.
+func (m *Manager) dropSession(id string) {
+	m.mu.Lock()
+	delete(m.sessions, id)
+	m.mu.Unlock()
+	_ = m.store.Delete(id)
+}
+
+// CreateWithOptions creates a new session with full options, synchronously.
+// It is a thin composition of ReserveCreation + ProvisionAsync + (on
+// failure) dropSession, preserving the historical contract that no session
+// record is persisted when creation fails.
+//
+// The second return value is retained for signature compatibility and is
+// always "". Any non-fatal warning produced during provisioning is written
+// to Session.CreationWarning (via SetCreationWarning), which is the single
+// source of truth for both the sync and async paths — callers read it back
+// through Get / GetInfo.
+//
+// Prefer ReserveCreation + ProvisionAsync directly when the caller wants
+// its session ID before external I/O completes (the daemon's `new` handler
+// takes that path).
+func (m *Manager) CreateWithOptions(opts CreateOptions) (*Session, string, error) {
+	sess, _, err := m.ReserveCreation(opts)
+	if err != nil {
+		return nil, "", err
+	}
+	warning, provErr := m.ProvisionAsync(sess, opts)
+	if provErr != nil {
+		// Sync compat: caller expects "nothing persisted on failure".
+		m.dropSession(sess.ID)
+		return nil, "", provErr
+	}
+	if warning != "" {
+		m.SetCreationWarning(sess.ID, warning)
+	}
+	// Provisioning succeeded but no agent has been started. Transition
+	// Status off Creating so callers that skip StartBackground (existing
+	// tests, non-daemon helpers) do not see a stuck "creating" state.
+	m.SetStatus(sess.ID, StatusStopped)
+	return sess, "", nil
 }
 
 // List returns all sessions sorted by creation time
@@ -755,12 +975,30 @@ func (m *Manager) List() []Info {
 	return infos
 }
 
-// Get returns a session by ID
+// Get returns a session by ID. The returned pointer aliases the live map
+// entry; callers must not read or write through it once the manager can
+// mutate it in another goroutine. Prefer GetInfo for a race-free snapshot
+// whenever the caller only needs a read.
 func (m *Manager) Get(id string) (*Session, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	s, ok := m.sessions[id]
 	return s, ok
+}
+
+// GetInfo returns a value-copy Info snapshot of a session, taken under the
+// read lock so it is safe to inspect while other goroutines mutate the live
+// record. This is the read path async callers (the daemon `get` handler,
+// tests observing goroutine progress) should use — Get's aliased pointer
+// races with the write side of ProvisionAsync / SetStatus / MarkDeleting.
+func (m *Manager) GetInfo(id string) (Info, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	s, ok := m.sessions[id]
+	if !ok {
+		return Info{}, false
+	}
+	return s.ToInfo(), true
 }
 
 // SetStatus updates the status of a session
@@ -2118,44 +2356,215 @@ func (m *Manager) Kill(id string) error {
 	return nil
 }
 
-// Delete removes a session completely.
-// If removeWorktree is true and the session's WorkDir is a git worktree,
-// the worktree will also be removed. If the worktree has uncommitted changes
-// and forceRemoveWorktree is false, ErrWorktreeDirty is returned.
+// DeleteRequest carries the resolved intent for a delete after PreCheckDelete
+// has run its synchronous checks. It is passed from MarkDeleting into
+// DeleteFinalize so the async goroutine has everything it needs without
+// re-taking the manager lock to re-read the session record.
 //
-// Worktree removal failures are always fatal to the delete: the session record
-// is kept and the error is returned, so the caller never sees a success while
-// the worktree is still on disk. Retry after fixing the cause, or delete
-// without removeWorktree to drop the session and keep the directory.
-func (m *Manager) Delete(id string, removeWorktree, forceRemoveWorktree bool) error {
+// Fields other than ID/RemoveWorktree/ForceRemoveWorktree are populated by
+// PreCheckDelete and treated as opaque snapshot by callers.
+type DeleteRequest struct {
+	ID                  string
+	RemoveWorktree      bool
+	ForceRemoveWorktree bool
+	// workDir is the resolved effective worktree path, computed under
+	// PreCheckDelete via ResolveWorktreeDir. Empty when RemoveWorktree is
+	// false or the session has no work directory.
+	workDir string
+	// tmuxWindowName snapshots the window under MarkDeleting's write lock so
+	// the goroutine can KillSession without re-reading the record. Taken
+	// there (not in PreCheckDelete) so a Kill/Start racing the pre-check
+	// window does not hand DeleteFinalize a stale name.
+	tmuxWindowName string
+	// previousStatus is the Status the session held immediately before
+	// MarkDeleting flipped it to StatusDeleting. MarkDeletionFailed uses
+	// this to restore the pre-delete state on finalize failure — falling
+	// back to Stopped would silently degrade a still-running session
+	// (idle/thinking/permission) into "attach-broken" territory.
+	previousStatus Status
+}
+
+// PreCheckDelete runs the synchronous checks a delete request must pass
+// before the daemon can accept it and defer the rest to a background
+// goroutine: session existence, worktree resolution, and (when the caller
+// asked to remove the worktree without force) a dirty-tree probe.
+//
+// On success it returns a DeleteRequest carrying the resolved worktree path
+// and tmux window name, so the caller can pass it directly to MarkDeleting
+// + DeleteFinalize without another lock pass. On failure the caller should
+// surface the error to the client synchronously — no state has been touched.
+//
+// The dirty probe runs synchronously on purpose: it costs a `git status
+// --porcelain` on a checkout the user is asking to delete, which is fast on
+// clean trees and only slow on trees so large the removal itself would take
+// minutes. Reporting dirty synchronously preserves the TUI's confirm-force
+// UX (the CLI's `--force` decision must be made at that same moment).
+func (m *Manager) PreCheckDelete(id string, removeWorktree, forceRemoveWorktree bool) (DeleteRequest, error) {
 	// Defense-in-depth: the CLI validates the same combination, but non-CLI
 	// callers (TUI, integration tests, future clients) reach Manager directly.
 	if forceRemoveWorktree && !removeWorktree {
-		return fmt.Errorf("forceRemoveWorktree requires removeWorktree")
+		return DeleteRequest{}, fmt.Errorf("forceRemoveWorktree requires removeWorktree")
 	}
 
-	m.mu.Lock()
-
+	m.mu.RLock()
 	session, ok := m.sessions[id]
 	if !ok {
-		m.mu.Unlock()
-		return fmt.Errorf("session %s not found", id)
+		m.mu.RUnlock()
+		return DeleteRequest{}, fmt.Errorf("session %s not found", id)
 	}
-
+	// Reject in-flight duplicates up front. Without this, a second
+	// PreCheckDelete would still resolve workDir and run `git status` on a
+	// checkout the first request is already rm -rf'ing (spurious
+	// ErrNotWorktree / ErrWorktreeDirty). It also blocks a stale-snapshot
+	// path where the second request captures previousStatus=Deleting.
+	// MarkDeleting is where the CAS actually lands (and where
+	// previousStatus is snapshotted) — this is the pre-check version.
+	if session.Status == StatusDeleting {
+		m.mu.RUnlock()
+		return DeleteRequest{}, ErrDeleteInFlight
+	}
+	req := DeleteRequest{
+		ID:                  id,
+		RemoveWorktree:      removeWorktree,
+		ForceRemoveWorktree: forceRemoveWorktree,
+		// previousStatus and tmuxWindowName are intentionally left zero
+		// here — MarkDeleting snapshots them under the write lock so a
+		// Status change or a Kill/Start racing this pre-check cannot make
+		// them stale.
+	}
 	currentWorkDir := session.CurrentWorkDir
 	persistedWorkDir := session.WorkDir
-	m.mu.Unlock()
+	m.mu.RUnlock()
 
-	// Resolve the actual worktree path outside the lock — ResolveWorktreeDir
-	// performs os.Lstat probes which would otherwise block other goroutines.
+	if !removeWorktree {
+		return req, nil
+	}
+
+	// Resolve outside the lock: ResolveWorktreeDir performs os.Lstat probes.
 	workDir := git.ResolveWorktreeDir(currentWorkDir, persistedWorkDir)
+	req.workDir = workDir
+	if workDir == "" {
+		return req, nil
+	}
 
-	// Remove worktree if requested (outside lock to avoid blocking during exec).
-	// Runs before tmux kill and store removal so a failure aborts before
-	// anything on the jin side is touched. Git may still have removed files
-	// before failing, so the directory itself is not guaranteed pristine.
-	if removeWorktree && workDir != "" {
-		if err := m.removeGitWorktree(workDir, forceRemoveWorktree); err != nil {
+	// Directory already gone (manual `rm -rf`, prior partial delete):
+	// skip the worktree + dirty probes and let DeleteFinalize's
+	// removeGitWorktree short-circuit on its own os.IsNotExist branch. The
+	// old sync Delete relied on that idempotency to succeed here; a
+	// synchronous ErrNotWorktree from IsGitWorktreeDir would be a
+	// regression against callers that reasonably expect delete-with-missing
+	// -worktree to still drop the session.
+	if _, err := os.Stat(workDir); os.IsNotExist(err) {
+		return req, nil
+	}
+
+	if !git.IsGitWorktreeDir(workDir) {
+		return DeleteRequest{}, ErrNotWorktree
+	}
+
+	if !forceRemoveWorktree {
+		dirty, err := m.gitClient.IsDirty(workDir)
+		if err != nil {
+			// git failure ≠ dirty; fall through and let the actual
+			// `git worktree remove` in DeleteFinalize surface the real
+			// problem. Log so operators can trace an unexpected failure.
+			debugLog("[DELETE] pre-check IsDirty(%s) failed: %v", workDir, err)
+		} else if dirty {
+			return DeleteRequest{}, ErrWorktreeDirty
+		}
+	}
+
+	return req, nil
+}
+
+// ErrDeleteInFlight is returned by MarkDeleting when the session is already
+// StatusDeleting — a prior accepted delete is still running its goroutine.
+// The daemon handler surfaces this to reject the duplicate request instead
+// of spawning a second DeleteFinalize goroutine that would race the first
+// on `removeGitWorktree` / `KillSession` / `store.Delete`.
+var ErrDeleteInFlight = errors.New("delete already in progress for this session")
+
+// MarkDeleting flips a session's Status to StatusDeleting under the write
+// lock and captures the pre-flip Status into req.previousStatus in the
+// same critical section. Acts as a compare-and-set: returns
+// ErrDeleteInFlight if the session is already StatusDeleting, so
+// concurrent delete requests serialize on the state flip. Returns a plain
+// error if the session is missing.
+//
+// The atomicity of "snapshot previousStatus and flip Status" matters:
+// PreCheckDelete runs under a separate RLock and cannot own the
+// previousStatus reliably — if it did, a Status change between pre-check
+// and flip would let a subsequent MarkDeletionFailed restore to a stale
+// value (in the extreme, StatusDeleting itself, leaving the record
+// permanently stuck). Snapshotting here closes that window.
+//
+// req.tmuxWindowName is refreshed here for the same reason: PreCheckDelete
+// took its snapshot under an RLock that a Kill/Start could have raced,
+// leaving DeleteFinalize with a stale name. Re-reading under the write
+// lock hands the goroutine the freshest value.
+func (m *Manager) MarkDeleting(req *DeleteRequest) error {
+	m.mu.Lock()
+	session, ok := m.sessions[req.ID]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("session %s not found", req.ID)
+	}
+	if session.Status == StatusDeleting {
+		m.mu.Unlock()
+		return ErrDeleteInFlight
+	}
+	req.previousStatus = session.Status
+	req.tmuxWindowName = session.TmuxWindowName
+	session.Status = StatusDeleting
+	saved := *session
+	m.mu.Unlock()
+	if err := m.store.Save(saved); err != nil {
+		debugLog("[SESSION] MarkDeleting %s: persist failed: %v", req.ID, err)
+	}
+	return nil
+}
+
+// MarkDeletionFailed rolls back a MarkDeleting flip when DeleteFinalize
+// errors: Status returns to the value req.previousStatus captured before
+// the flip (idle/running/thinking/permission survive intact so a
+// pane-alive session stays attach-usable), and ErrorMessage records err.
+// The record is preserved so the client sees the failure through `get`.
+// Idempotent — safe on missing sessions.
+//
+// The store.Save is fire-and-forget (same reasoning as MarkCreationFailed):
+// log on failure so an unreachable filesystem is diagnosable.
+func (m *Manager) MarkDeletionFailed(req DeleteRequest, err error) {
+	m.mu.Lock()
+	session, ok := m.sessions[req.ID]
+	if !ok {
+		m.mu.Unlock()
+		return
+	}
+	// Only rewrite Status when we are the one still holding the Deleting
+	// flip — some other path (e.g. hook event, recovery) may have advanced
+	// it while we were finalizing, and we do not want to clobber that.
+	if session.Status == StatusDeleting {
+		session.Status = req.previousStatus
+	}
+	if err != nil {
+		session.ErrorMessage = err.Error()
+	}
+	saved := *session
+	m.mu.Unlock()
+	if saveErr := m.store.Save(saved); saveErr != nil {
+		debugLog("[SESSION] MarkDeletionFailed %s: persist failed: %v", req.ID, saveErr)
+	}
+}
+
+// DeleteFinalize runs the destructive tail of delete (worktree removal, tmux
+// kill, store delete, map drop) using the resolved DeleteRequest from
+// PreCheckDelete. It runs entirely outside the request/response window: the
+// daemon handler goroutine calls it after acknowledging the client, and any
+// failure is reported through MarkDeletionFailed rather than a return error
+// that no one is waiting for.
+func (m *Manager) DeleteFinalize(req DeleteRequest) error {
+	if req.RemoveWorktree && req.workDir != "" {
+		if err := m.removeGitWorktree(req.workDir, req.ForceRemoveWorktree); err != nil {
 			return err
 		}
 	}
@@ -2163,17 +2572,39 @@ func (m *Manager) Delete(id string, removeWorktree, forceRemoveWorktree bool) er
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Kill the inner tmux session entirely
-	if m.tmuxClient != nil && session.TmuxWindowName != "" {
-		_ = m.tmuxClient.KillSession(session.TmuxWindowName)
+	if m.tmuxClient != nil && req.tmuxWindowName != "" {
+		_ = m.tmuxClient.KillSession(req.tmuxWindowName)
 	}
 
-	// Remove from store
-	if err := m.store.Delete(id); err != nil {
+	if err := m.store.Delete(req.ID); err != nil {
 		return err
 	}
 
-	delete(m.sessions, id)
+	delete(m.sessions, req.ID)
+	return nil
+}
+
+// Delete removes a session completely, synchronously. It is a thin
+// composition of PreCheckDelete + MarkDeleting + DeleteFinalize, preserved
+// for tests and helpers that want a linear return-when-done contract.
+//
+// Semantics match the historical contract: worktree removal failures are
+// fatal to the delete, and the session record is kept so the caller can
+// retry after fixing the cause. Async callers (the daemon's `delete`
+// handler) use PreCheckDelete + MarkDeleting + `go DeleteFinalize` +
+// MarkDeletionFailed instead, so the wait moves off the request path.
+func (m *Manager) Delete(id string, removeWorktree, forceRemoveWorktree bool) error {
+	req, err := m.PreCheckDelete(id, removeWorktree, forceRemoveWorktree)
+	if err != nil {
+		return err
+	}
+	if err := m.MarkDeleting(&req); err != nil {
+		return err
+	}
+	if err := m.DeleteFinalize(req); err != nil {
+		m.MarkDeletionFailed(req, err)
+		return err
+	}
 	return nil
 }
 

@@ -92,6 +92,7 @@ func TestStatus_StringValues(t *testing.T) {
 		{StatusIdle, "idle"},
 		{StatusThinking, "thinking"},
 		{StatusPermission, "permission"},
+		{StatusDeleting, "deleting"},
 	}
 
 	for _, tt := range tests {
@@ -111,6 +112,7 @@ func TestSession_JSONRoundTrip(t *testing.T) {
 		Status:              StatusIdle,
 		LastActiveAt:        now.Add(-2 * time.Minute),
 		ErrorMessage:        "test error",
+		CreationWarning:     "test warning",
 		AgentSessionID:      "claude-rt-789",
 		AgentSessionStarted: true,
 		Fleet:               "frontend",
@@ -149,6 +151,9 @@ func TestSession_JSONRoundTrip(t *testing.T) {
 	}
 	if restored.ErrorMessage != original.ErrorMessage {
 		t.Errorf("ErrorMessage: got %q, want %q", restored.ErrorMessage, original.ErrorMessage)
+	}
+	if restored.CreationWarning != original.CreationWarning {
+		t.Errorf("CreationWarning: got %q, want %q", restored.CreationWarning, original.CreationWarning)
 	}
 	if restored.AgentSessionID != original.AgentSessionID {
 		t.Errorf("AgentSessionID: got %q, want %q", restored.AgentSessionID, original.AgentSessionID)

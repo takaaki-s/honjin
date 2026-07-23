@@ -12,12 +12,24 @@ const DefaultFleet = "default"
 type Status string
 
 const (
-	StatusCreating   Status = "creating"   // CC starting up
+	// StatusCreating covers both worktree/session provisioning (before the
+	// agent has been launched) and the agent's own startup window (before the
+	// first hook arrives). The union is intentional: both are "not yet usable"
+	// and the UI treats them identically, so one status keeps the state
+	// machine small.
+	StatusCreating   Status = "creating"
 	StatusStopped    Status = "stopped"    // Process stopped
 	StatusRunning    Status = "running"    // Running (details unknown)
 	StatusIdle       Status = "idle"       // Waiting for input (Stop hook)
 	StatusThinking   Status = "thinking"   // Processing (UserPromptSubmit hook)
 	StatusPermission Status = "permission" // Waiting for permission (Notification hook)
+	// StatusDeleting marks a session whose deletion has been accepted but not
+	// yet finalized. The daemon handles delete asynchronously so `git worktree
+	// remove` (an rm -rf of a checkout) does not hold up the client; the
+	// session sits in this state from the moment the request is accepted
+	// until either the record is dropped (success) or the status flips back
+	// to Stopped with ErrorMessage set (failure).
+	StatusDeleting Status = "deleting"
 )
 
 // Session represents an agent session managed by jind-ai. The concrete agent
@@ -36,6 +48,16 @@ type Session struct {
 
 	// Error info
 	ErrorMessage string `json:"error_message,omitempty"` // Error message
+
+	// CreationWarning carries a non-fatal message produced during async
+	// provisioning (e.g. "post-create hook detected but not allowed"). It is
+	// distinct from ErrorMessage — a warning does not fail the creation, and
+	// the session becomes usable regardless — but the client still needs a
+	// way to see it, so it lives on the record and is surfaced through Info
+	// on every `get`. It is intentionally not cleared automatically: the
+	// warning was true at creation time, and clearing it would erase the
+	// audit trail; the record is dropped when the session is deleted.
+	CreationWarning string `json:"creation_warning,omitempty"`
 
 	// AgentKind identifies the adapter (registry key) that owns this session.
 	// Always non-empty in persisted form; the store migration backfills legacy
@@ -82,6 +104,7 @@ type Info struct {
 	CreatedAt         time.Time `json:"created_at"`
 	LastActiveAt      time.Time `json:"last_active_at,omitzero"`
 	ErrorMessage      string    `json:"error_message,omitempty"`
+	CreationWarning   string    `json:"creation_warning,omitempty"` // Non-fatal warning from async provisioning (see Session.CreationWarning)
 	AgentKind         string    `json:"agent_kind,omitempty"`       // Adapter identifier ("claude" etc.)
 	AgentSessionID    string    `json:"agent_session_id,omitempty"` // Adapter-side persistent session id (transcript lookup, resume)
 	TmuxWindowName    string    `json:"tmux_window_name,omitempty"` // tmux window name
@@ -128,6 +151,7 @@ func (s *Session) ToInfo() Info {
 		CreatedAt:         s.CreatedAt,
 		LastActiveAt:      s.LastActiveAt,
 		ErrorMessage:      s.ErrorMessage,
+		CreationWarning:   s.CreationWarning,
 		AgentKind:         s.AgentKind,
 		AgentSessionID:    s.AgentSessionID,
 		TmuxWindowName:    s.TmuxWindowName,
