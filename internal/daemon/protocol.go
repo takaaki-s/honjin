@@ -18,4 +18,8 @@ package daemon
 // analogous silent parse error. A brand-new endpoint that never existed
 // before does not need a bump — old clients simply never call it — but a
 // change to an existing endpoint's Data shape does.
-const ProtocolVersion = 1
+//
+// v2 (feat/daemon-async-handlers): NewResponse now returns a StatusCreating
+// reservation immediately instead of a fully-provisioned session;
+// Session/Info gained CreationWarning to carry async-time warnings.
+const ProtocolVersion = 2

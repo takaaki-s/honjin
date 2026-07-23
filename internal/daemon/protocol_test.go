@@ -206,8 +206,8 @@ func assertDialTimeout(t *testing.T, got []time.Duration) {
 	}
 }
 
-// TestClientSendWithTimeout_ZeroSkipsOnlyTheReadDeadline pins the PanePopup /
-// New contract: a caller that cannot name a bound waives the wait for the
+// TestClientSendWithTimeout_ZeroSkipsOnlyTheReadDeadline pins the PanePopup
+// contract: a caller that cannot name a bound waives the wait for the
 // response, and nothing else. The write stays bounded so that a daemon which
 // stopped reading cannot wedge Encode forever.
 func TestClientSendWithTimeout_ZeroSkipsOnlyTheReadDeadline(t *testing.T) {
@@ -238,8 +238,8 @@ func TestClientCallSites_PassTheirOwnBound(t *testing.T) {
 	}{
 		{"SendHook", func(c *Client) error { return c.SendHook(HookRequest{}) }, hookRequestTimeout},
 		{"PanePopup", func(c *Client) error { return c.PanePopup("id", "cmd", "", "", "") }, 0},
-		{"NewWithOptions", func(c *Client) error { _, _, err := c.NewWithOptions(NewOptions{}); return err }, 0},
-		{"Delete", func(c *Client) error { return c.Delete("id", true, false) }, 0},
+		{"NewWithOptions", func(c *Client) error { _, _, err := c.NewWithOptions(NewOptions{}); return err }, defaultRequestTimeout},
+		{"Delete", func(c *Client) error { return c.Delete("id", true, false) }, defaultRequestTimeout},
 		{"List via send", func(c *Client) error { _, err := c.List(); return err }, defaultRequestTimeout},
 	}
 

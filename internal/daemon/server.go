@@ -369,10 +369,7 @@ func (s *Server) handleNew(data json.RawMessage) Response {
 		return Response{Success: false, Error: err.Error()}
 	}
 
-	// Synchronous mode - mutual exclusion
-	s.createMu.Lock()
-
-	sess, warning, err := s.manager.CreateWithOptions(session.CreateOptions{
+	opts := session.CreateOptions{
 		Description:    req.Description,
 		WorkDir:        req.WorkDir,
 		Fleet:          req.Fleet,
@@ -382,26 +379,64 @@ func (s *Server) handleNew(data json.RawMessage) Response {
 		WorktreeBranch: req.WorktreeBranch,
 		WorktreeBase:   req.WorktreeBase,
 		NoHook:         req.NoHook,
-	})
+	}
+
+	// Take createMu around the *entire* async lifetime, not just the
+	// synchronous prefix: concurrent `new` requests must still be serialized
+	// so their worktree provisioning cannot interleave and (worse) so their
+	// findAvailableWorktreeName probes see each other's committed state. The
+	// goroutine below is what unlocks it.
+	s.createMu.Lock()
+
+	sess, info, err := s.manager.ReserveCreation(opts)
 	if err != nil {
 		s.createMu.Unlock()
 		return Response{Success: false, Error: err.Error()}
 	}
+	sessID := info.ID
 
-	s.createMu.Unlock()
+	// Dispatch the provisioning + start to a goroutine and return the
+	// StatusCreating reservation to the caller immediately. The client
+	// polls `get` to observe the transition to running/idle/stopped, and
+	// any failure is surfaced through Session.ErrorMessage rather than the
+	// (already-departed) request/response.
+	start := req.Start
+	workDir := req.WorkDir
+	go func() {
+		defer s.createMu.Unlock()
 
-	// Record directory usage in persistent history
-	_ = s.stateMgr.RecordDirUsage(req.WorkDir)
-
-	// Start session in background if requested
-	if req.Start {
-		if err := s.manager.StartBackground(sess.ID); err != nil {
-			_ = s.manager.Delete(sess.ID, false, false)
-			return Response{Success: false, Error: err.Error()}
+		warning, provErr := s.manager.ProvisionAsync(sess, opts)
+		if provErr != nil {
+			s.manager.MarkCreationFailed(sessID, provErr)
+			return
 		}
-	}
+		if warning != "" {
+			s.manager.SetCreationWarning(sessID, warning)
+		}
 
-	respData, _ := json.Marshal(NewResponse{Info: sess.ToInfo(), Warning: warning})
+		_ = s.stateMgr.RecordDirUsage(workDir)
+
+		if start {
+			// StartBackground moves Status off Creating through the
+			// adapter's own path. On failure we mark the session and
+			// leave the record so the client can see what happened.
+			if err := s.manager.StartBackground(sessID); err != nil {
+				s.manager.MarkCreationFailed(sessID, err)
+				return
+			}
+		} else {
+			// No start requested — provisioning is done but no agent is
+			// running. Move Status off Creating so `get` shows "ready to
+			// start" instead of a stuck creating state.
+			s.manager.SetStatus(sessID, session.StatusStopped)
+		}
+	}()
+
+	// Warning is intentionally empty here: any warning discovered during
+	// async provisioning is written to Session.CreationWarning by the
+	// goroutine above and observable through `get`. NewResponse.Warning is
+	// kept for the (currently empty) set of synchronous warnings.
+	respData, _ := json.Marshal(NewResponse{Info: info})
 	return Response{Success: true, Data: respData}
 }
 
@@ -417,12 +452,14 @@ func (s *Server) handleGet(data json.RawMessage) Response {
 		return Response{Success: false, Error: err.Error()}
 	}
 
-	sess, ok := s.manager.Get(req.ID)
+	// GetInfo (not Get) so we snapshot under the manager's read lock; the
+	// async provisioning / delete goroutines can mutate the record while a
+	// client polls `get`, and reading through Get's aliased pointer would
+	// race with those writers.
+	info, ok := s.manager.GetInfo(req.ID)
 	if !ok {
 		return Response{Success: false, Error: fmt.Sprintf("session not found: %s", req.ID)}
 	}
-
-	info := sess.ToInfo()
 
 	// Enrich with transcript data
 	reader := transcript.NewReader()
@@ -665,9 +702,35 @@ func (s *Server) handleDelete(data json.RawMessage) Response {
 		return Response{Success: false, Error: err.Error()}
 	}
 
-	if err := s.manager.Delete(req.ID, req.RemoveWorktree, req.ForceRemoveWorktree); err != nil {
+	// PreCheckDelete runs the synchronous validations (session existence,
+	// worktree resolution, dirty probe). Failures here surface to the
+	// client on the request — the TUI's "worktree is dirty, retry with
+	// force?" confirmation depends on this staying synchronous.
+	dreq, err := s.manager.PreCheckDelete(req.ID, req.RemoveWorktree, req.ForceRemoveWorktree)
+	if err != nil {
 		return Response{Success: false, Error: err.Error()}
 	}
+
+	// Flip Status to StatusDeleting so a `get` between here and the
+	// goroutine's completion surfaces the in-flight state to the UI.
+	// MarkDeleting is a CAS: if a prior accept is still finalizing, it
+	// returns ErrDeleteInFlight and we reject the duplicate here so two
+	// finalize goroutines cannot race on the same worktree. It also
+	// atomically captures dreq.previousStatus for MarkDeletionFailed's
+	// rollback path (see manager.MarkDeleting for the split-lock reason).
+	if err := s.manager.MarkDeleting(&dreq); err != nil {
+		return Response{Success: false, Error: err.Error()}
+	}
+
+	// Dispatch the destructive tail (git worktree remove, tmux kill, store
+	// delete, map drop) to a goroutine. Failures roll Status back to the
+	// pre-delete value with ErrorMessage populated, observable through
+	// `get`.
+	go func() {
+		if err := s.manager.DeleteFinalize(dreq); err != nil {
+			s.manager.MarkDeletionFailed(dreq, err)
+		}
+	}()
 
 	return Response{Success: true}
 }

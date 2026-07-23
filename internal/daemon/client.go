@@ -15,11 +15,11 @@ import (
 
 // The client sets a bound only when it can name one that is certainly longer
 // than any legitimate handler run. Where the handler's legitimate duration is
-// unknowable from here — a popup's user-controlled lifetime, a user-configurable
-// hook timeout, an rm -rf over a checkout of unknown size — the client passes 0
-// to sendWithTimeout and defers to the bound the handler already owns. A bound
-// we cannot justify does not protect anyone: a timeout is not a cancellation,
-// so it would only report "outcome unknown" for work that went on to succeed.
+// unknowable from here — a popup's user-controlled lifetime — the client
+// passes 0 to sendWithTimeout and defers to the bound the handler already
+// owns. A bound we cannot justify does not protect anyone: a timeout is not a
+// cancellation, so it would only report "outcome unknown" for work that went
+// on to succeed.
 const (
 	// dialTimeout bounds connecting to the daemon socket. A local unix socket
 	// either connects instantly or not at all, so anything slower means the
@@ -38,15 +38,19 @@ const (
 	requestWriteTimeout = 5 * time.Second
 
 	// defaultRequestTimeout bounds the wait for a response on every action
-	// that does not name its own bound. Out of its scope are "new" and
-	// "delete" (each fronts an external process with no bound this side can
-	// name) and "pane-popup" (user-controlled lifetime); "hook" and "stop"
-	// take the tighter bounds below. What is left is tmux subprocess calls
-	// and local file reads, plus one handler with a named cost: "send" waits
-	// up to sendVerifyTimeout (5s) for the prompt to appear in the pane.
-	// Those handlers also queue behind the manager lock, so 60s is chosen to
-	// clear a backlog of them comfortably — hitting it should mean "the
-	// daemon is wedged", not "this machine is loaded".
+	// that does not name its own bound. Out of its scope is only
+	// "pane-popup" (user-controlled lifetime); "hook" and "stop" take the
+	// tighter bounds below. "new" and "delete" default here too: their
+	// handlers now return an acknowledgement as soon as the synchronous
+	// pre-checks pass, and hand the worktree ops / post-create hook / tmux
+	// teardown to a goroutine (see "Async completion" in
+	// docs/ipc-protocol.md), so the response wait no longer has to cover an
+	// external process of unknown duration. What is left is tmux subprocess
+	// calls and local file reads, plus one handler with a named cost: "send"
+	// waits up to sendVerifyTimeout (5s) for the prompt to appear in the
+	// pane. Those handlers also queue behind the manager lock, so 60s is
+	// chosen to clear a backlog of them comfortably — hitting it should mean
+	// "the daemon is wedged", not "this machine is loaded".
 	defaultRequestTimeout = 60 * time.Second
 
 	// hookRequestTimeout bounds the agent-facing hook path. The trade cuts
@@ -273,13 +277,14 @@ func (c *Client) NewWithOptions(opts NewOptions) (*session.Info, string, error) 
 	// copy; NewRequest's JSON tags apply on Marshal regardless.
 	data, _ := json.Marshal(NewRequest(opts))
 
-	// No read bound: CreateWithOptions runs a chain of unbounded steps —
-	// git prune, then `git worktree add`, then the post-create hook where
-	// `npm ci` and friends live. Only the last of those is capped (by the
-	// user's worktree.hook_timeout, 300s by default and freely raised), so
-	// there is no duration to name here that would not eventually fire on a
-	// session that was in fact being created successfully.
-	resp, err := c.sendWithTimeout(Request{Action: "new", Data: data}, 0)
+	// defaultRequestTimeout applies here (via send): handleNew only
+	// registers the session record and returns a StatusCreating reservation
+	// before this call gets its response. The worktree ops and post-create
+	// hook that used to run inline — where `npm ci` and friends could take a
+	// while — now run in a goroutine after the response is sent (see server.go
+	// handleNew). Callers that need to know when provisioning actually
+	// finishes poll Get for the Status transition off StatusCreating.
+	resp, err := c.send(Request{Action: "new", Data: data})
 	if err != nil {
 		return nil, "", err
 	}
@@ -394,13 +399,15 @@ func (c *Client) Kill(id string) error {
 // is false, an error is returned.
 func (c *Client) Delete(id string, removeWorktree, forceRemoveWorktree bool) error {
 	data, _ := json.Marshal(DeleteRequest{ID: id, RemoveWorktree: removeWorktree, ForceRemoveWorktree: forceRemoveWorktree})
-	// No read bound, for the same reason as NewWithOptions: Manager.Delete runs
-	// `git worktree remove` synchronously and that has no timeout on either
-	// side. Removing a worktree is an rm -rf of a whole checkout — node_modules
-	// included — so how long it legitimately takes is a property of the user's
-	// disk, not something this side can name. It runs outside the manager lock
-	// (manager.go), so a slow delete does not hold up other actions either.
-	resp, err := c.sendWithTimeout(Request{Action: "delete", Data: data}, 0)
+	// defaultRequestTimeout applies here too: handleDelete only runs the
+	// synchronous pre-checks (session exists, dirty/not-worktree validation)
+	// before this call gets its response. The worktree removal — an rm -rf
+	// of a whole checkout, node_modules included — and tmux teardown that
+	// used to run inline now happen in a goroutine after the response is
+	// sent (see server.go handleDelete). The session moves to
+	// StatusDeleting and disappears from Get/List once teardown actually
+	// finishes.
+	resp, err := c.send(Request{Action: "delete", Data: data})
 	if err != nil {
 		return err
 	}

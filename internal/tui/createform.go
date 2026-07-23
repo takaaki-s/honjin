@@ -701,6 +701,18 @@ func (m CreateFormModel) evaluateHook(workDir string) (string, worktreehook.Verd
 // Description is intentionally sent empty: the daemon populates it via
 // Layer A at creation, and Layer C promotes it from the first user prompt
 // once the transcript is flushed.
+//
+// Async semantics (PR feat/daemon-async-handlers): `new` is asynchronous
+// end-to-end. NewWithOptions returns as soon as the daemon has reserved a
+// session ID with Status=StatusCreating; the returned `s.ID` is stable and
+// can be used immediately for focus, but provisioning (git worktree add,
+// post-create hook) and StartBackground continue in a daemon goroutine.
+// The parent TUI observes the transition to running/idle through its 2s
+// polling ticker, so this form does not wait for completion before Quit.
+// Any non-fatal warning surfaced during provisioning is stashed on
+// Session.CreationWarning by the daemon and observable via `get`; the
+// synchronous `warning` here is currently always empty (kept in the
+// signature for future sync-time warnings).
 func (m CreateFormModel) submitWith(noHook bool) tea.Cmd {
 	workDir := m.dirPicker.Result()
 	fleet := strings.TrimSpace(m.fleetInput.Value())

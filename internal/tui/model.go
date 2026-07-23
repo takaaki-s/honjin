@@ -522,15 +522,29 @@ func (m *Model) switchToSession(sessionID string) {
 		m.displayLocalAttach = false
 	}
 
-	// Stopped/error sessions: show placeholder in right pane (no TmuxWindowName needed)
+	// Stopped/error sessions: show placeholder in right pane (no TmuxWindowName needed).
+	// CreationWarning (non-fatal notice from async provisioning, e.g. hook
+	// not allowed) is appended when set — the session still worked, but the
+	// note is worth surfacing anywhere the placeholder is visible.
 	if !isSessionAlive(sess.Status) {
 		var placeholderCmd string
-		if sess.ErrorMessage != "" {
+		switch {
+		case sess.ErrorMessage != "" && sess.CreationWarning != "":
+			placeholderCmd = fmt.Sprintf(
+				"printf '\\n  Session: %s\\n  Status:  %s\\n\\n  Error:\\n%s\\n\\n  Warning:\\n%s\\n'; tail -f /dev/null",
+				sess.Description, sess.Status, sess.ErrorMessage, sess.CreationWarning,
+			)
+		case sess.ErrorMessage != "":
 			placeholderCmd = fmt.Sprintf(
 				"printf '\\n  Session: %s\\n  Status:  %s\\n\\n  Error:\\n%s\\n'; tail -f /dev/null",
 				sess.Description, sess.Status, sess.ErrorMessage,
 			)
-		} else {
+		case sess.CreationWarning != "":
+			placeholderCmd = fmt.Sprintf(
+				"printf '\\n  Session: %s\\n  Status:  %s\\n\\n  Warning:\\n%s\\n\\n  Press Enter to restart\\n'; tail -f /dev/null",
+				sess.Description, sess.Status, sess.CreationWarning,
+			)
+		default:
 			placeholderCmd = fmt.Sprintf(
 				"printf '\\n  Session: %s\\n  Status:  %s\\n\\n  Press Enter to restart\\n'; tail -f /dev/null",
 				sess.Description, sess.Status,
@@ -1226,17 +1240,30 @@ func (m Model) updateListMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessions = msg
 		m.err = nil
 
-		// Check if any deleting sessions have been removed (deletion completed)
+		// Check if any deleting sessions have been resolved: either the
+		// record disappeared (successful async finalize) or it flipped back
+		// to Stopped with ErrorMessage set (async finalize failed and
+		// MarkDeletionFailed rolled the record back). In both cases the
+		// grey-out treatment must clear; only the record-gone case triggers
+		// a reswitch since the slot itself changed.
 		deleteCompleted := false
 		if len(m.deletingIDs) > 0 {
-			sessionIDs := make(map[string]bool, len(m.sessions))
+			current := make(map[string]session.Info, len(m.sessions))
 			for _, s := range m.sessions {
-				sessionIDs[s.ID] = true
+				current[s.ID] = s
 			}
 			for id := range m.deletingIDs {
-				if !sessionIDs[id] {
+				live, stillExists := current[id]
+				if !stillExists {
 					delete(m.deletingIDs, id)
 					deleteCompleted = true
+					continue
+				}
+				// Async finalize failed: MarkDeletionFailed rolled Status
+				// back to Stopped and populated ErrorMessage. Drop the
+				// grey-out so the user can see the error and retry.
+				if live.Status == session.StatusStopped && live.ErrorMessage != "" {
+					delete(m.deletingIDs, id)
 				}
 			}
 		}
